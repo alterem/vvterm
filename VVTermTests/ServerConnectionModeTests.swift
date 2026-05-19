@@ -67,6 +67,17 @@ struct ServerConnectionModeTests {
     }
 
     @Test
+    func encodeDecodePreservesJumpHostServerId() throws {
+        var server = makeServer(connectionMode: .standard, authMethod: .password)
+        let jumpHostId = UUID()
+        server.jumpHostServerId = jumpHostId
+
+        let data = try JSONEncoder().encode(server)
+        let decoded = try JSONDecoder().decode(Server.self, from: data)
+        #expect(decoded.jumpHostServerId == jumpHostId)
+    }
+
+    @Test
     func decodeWithUnknownConnectionModeDefaultsToStandard() throws {
         let server = makeServer(connectionMode: .standard, authMethod: .password)
         let data = try mutateJSON(server) { object in

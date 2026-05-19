@@ -41,7 +41,7 @@ final class ServerImportManager {
             nextOrder += 1
         }
 
-        let workspaceByName: [String: Workspace] = Dictionary(uniqueKeysWithValues: serverManager.workspaces.map { ($0.name, $0) })
+        var workspaceByName: [String: Workspace] = Dictionary(uniqueKeysWithValues: serverManager.workspaces.map { ($0.name, $0) })
         let workspaceNameByID: [UUID: String] = Dictionary(uniqueKeysWithValues: serverManager.workspaces.map { ($0.id, $0.name) })
         var existingServerKeys = Set<String>(serverManager.servers.compactMap { server -> String? in
             guard let workspaceName = workspaceNameByID[server.workspaceId] else { return nil }
@@ -57,7 +57,7 @@ final class ServerImportManager {
         var skippedCount = 0
 
         for item in preview.items {
-            guard let workspace = workspaceByName[item.workspaceName] else { continue }
+            guard var workspace = workspaceByName[item.workspaceName] else { continue }
             let deduplicationKey = makeDeduplicationKey(
                 workspaceName: item.workspaceName,
                 serverName: item.server.name,
@@ -69,8 +69,18 @@ final class ServerImportManager {
                 skippedCount += 1
                 continue
             }
+
+            let folderId = try await ensureFolderPath(
+                item.folderPath,
+                in: workspace,
+                using: serverManager
+            )
+            workspace = serverManager.workspace(withId: workspace.id) ?? workspace
+            workspaceByName[item.workspaceName] = workspace
+
             var server = item.server
             server.workspaceId = workspace.id
+            server.folderId = folderId
             try await serverManager.addServer(server, credentials: item.credentials)
             existingServerKeys.insert(deduplicationKey)
             importedCount += 1
@@ -107,6 +117,40 @@ final class ServerImportManager {
             String(port),
             username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         ].joined(separator: "|")
+    }
+
+    private func ensureFolderPath(
+        _ folderPath: [String],
+        in workspace: Workspace,
+        using serverManager: ServerManager
+    ) async throws -> UUID? {
+        guard !folderPath.isEmpty else { return nil }
+
+        var refreshedWorkspace = serverManager.workspace(withId: workspace.id) ?? workspace
+        var currentParentId: UUID?
+
+        for component in folderPath {
+            let trimmedName = component.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedName.isEmpty else { continue }
+
+            if let existing = refreshedWorkspace.folders.first(where: {
+                $0.parentId == currentParentId &&
+                $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
+            }) {
+                currentParentId = existing.id
+                continue
+            }
+
+            let created = try await serverManager.createFolder(
+                name: trimmedName,
+                in: refreshedWorkspace,
+                parentId: currentParentId
+            )
+            refreshedWorkspace = serverManager.workspace(withId: refreshedWorkspace.id) ?? refreshedWorkspace
+            currentParentId = created.id
+        }
+
+        return currentParentId
     }
 }
 
@@ -257,6 +301,7 @@ private enum VVTermWorkbookImporter {
             return ImportedServerRecord(
                 source: .vvtermExcel,
                 workspaceName: workspaceName,
+                folderPath: [],
                 server: server,
                 credentials: credentials
             )
@@ -518,9 +563,9 @@ private enum SecureCRTSessionImporter {
             values["S:Port"],
             values["S:\"Port\""]
         )
-        let port = Int(portString ?? "") ?? 22
+        let port = parsePort(from: portString) ?? 22
         let sessionName = fileURL.deletingPathExtension().lastPathComponent
-        let sessionFolder = workspaceName(for: fileURL, rootURL: rootURL)
+        let sessionLocation = sessionLocation(for: fileURL, rootURL: rootURL)
         let authMethod = resolveAuthMethod(values: values)
         let notes = firstNonEmpty(values["S:Description"], values["S:\"Description\""])
 
@@ -528,19 +573,23 @@ private enum SecureCRTSessionImporter {
 
         let server = Server(
             workspaceId: UUID(),
-            environment: inferEnvironment(from: sessionFolder, sessionName: sessionName),
+            environment: inferEnvironment(
+                from: [sessionLocation.workspaceName] + sessionLocation.folderPath,
+                sessionName: sessionName
+            ),
             name: sessionName,
             host: host,
             port: port,
             username: username,
             authMethod: authMethod,
-            tags: secureCRTTags(for: fileURL, rootURL: rootURL),
+            tags: sessionLocation.folderPath,
             notes: notes
         )
 
         return ImportedServerRecord(
             source: .secureCRT,
-            workspaceName: sessionFolder,
+            workspaceName: sessionLocation.workspaceName,
+            folderPath: sessionLocation.folderPath,
             server: server,
             credentials: credentials
         )
@@ -590,25 +639,26 @@ private enum SecureCRTSessionImporter {
         return .password
     }
 
-    private static func workspaceName(for fileURL: URL, rootURL: URL) -> String {
-        let relative = fileURL.deletingLastPathComponent().path.replacingOccurrences(of: rootURL.path, with: "")
-        let components = relative
+    private struct SessionLocation {
+        let workspaceName: String
+        let folderPath: [String]
+    }
+
+    private static func sessionLocation(for fileURL: URL, rootURL: URL) -> SessionLocation {
+        let relativeComponents = fileURL.deletingLastPathComponent()
+            .path
+            .replacingOccurrences(of: rootURL.path, with: "")
             .split(separator: "/")
             .map(String.init)
             .filter { !$0.isEmpty }
-        return components.first ?? String(localized: "SecureCRT")
+
+        let workspaceName = relativeComponents.first ?? String(localized: "SecureCRT")
+        let folderPath = Array(relativeComponents.dropFirst())
+        return SessionLocation(workspaceName: workspaceName, folderPath: folderPath)
     }
 
-    private static func secureCRTTags(for fileURL: URL, rootURL: URL) -> [String] {
-        let relativeComponents = fileURL.deletingLastPathComponent().path.replacingOccurrences(of: rootURL.path, with: "")
-            .split(separator: "/")
-            .map(String.init)
-            .filter { !$0.isEmpty }
-        return Array(relativeComponents.dropFirst())
-    }
-
-    private static func inferEnvironment(from workspace: String, sessionName: String) -> ServerEnvironment {
-        let combined = "\(workspace) \(sessionName)".lowercased()
+    private static func inferEnvironment(from pathComponents: [String], sessionName: String) -> ServerEnvironment {
+        let combined = (pathComponents + [sessionName]).joined(separator: " ").lowercased()
         if combined.contains("stag") {
             return .staging
         }
@@ -616,6 +666,30 @@ private enum SecureCRTSessionImporter {
             return .development
         }
         return .production
+    }
+
+    private static func parsePort(from rawValue: String?) -> Int? {
+        guard let rawValue = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else {
+            return nil
+        }
+
+        if let direct = Int(rawValue) {
+            return direct
+        }
+
+        let normalized = rawValue.lowercased()
+        if normalized.hasPrefix("0x"),
+           let hex = Int(normalized.dropFirst(2), radix: 16) {
+            return hex
+        }
+
+        if rawValue.range(of: "^[0-9a-fA-F]{8}$", options: .regularExpression) != nil,
+           let hex = Int(rawValue, radix: 16) {
+            return hex
+        }
+
+        return nil
     }
 
     private static func firstNonEmpty(_ values: String?...) -> String? {

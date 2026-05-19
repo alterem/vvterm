@@ -41,6 +41,7 @@ final class ServerImportManagerTests: XCTestCase {
         XCTAssertEqual(preview.items.count, 1)
         let item = try XCTUnwrap(preview.items.first)
         XCTAssertEqual(item.workspaceName, "Ops")
+        XCTAssertEqual(item.folderPath, [])
         XCTAssertEqual(item.server.environment, .production)
         XCTAssertEqual(item.server.name, "Prod API")
         XCTAssertEqual(item.server.host, "prod.example.com")
@@ -56,7 +57,9 @@ final class ServerImportManagerTests: XCTestCase {
 
     func testParseSecureCRTSessionsDirectoryBuildsRecordsFromNestedIniFiles() throws {
         let rootURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let groupURL = rootURL.appendingPathComponent("Production", isDirectory: true)
+        let groupURL = rootURL
+            .appendingPathComponent("Production", isDirectory: true)
+            .appendingPathComponent("Bastions", isDirectory: true)
         try FileManager.default.createDirectory(at: groupURL, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: rootURL) }
 
@@ -65,7 +68,7 @@ final class ServerImportManagerTests: XCTestCase {
         S:"Protocol Name"=SSH2
         S:"Hostname"=bastion.example.com
         S:"Username"=admin
-        D:"[SSH2] Port"=2222
+        D:"[SSH2] Port"=000008AE
         S:"Identity Filename V2"=/Users/demo/.ssh/id_ed25519
         """
         try content.write(to: fileURL, atomically: true, encoding: .utf8)
@@ -76,11 +79,55 @@ final class ServerImportManagerTests: XCTestCase {
         let item = try XCTUnwrap(preview.items.first)
         XCTAssertEqual(item.source, .secureCRT)
         XCTAssertEqual(item.workspaceName, "Production")
+        XCTAssertEqual(item.folderPath, ["Bastions"])
+        XCTAssertEqual(item.server.tags, ["Bastions"])
         XCTAssertEqual(item.server.name, "Bastion")
         XCTAssertEqual(item.server.host, "bastion.example.com")
         XCTAssertEqual(item.server.port, 2222)
         XCTAssertEqual(item.server.username, "admin")
         XCTAssertEqual(item.server.authMethod, .sshKey)
         XCTAssertEqual(item.server.environment, .production)
+    }
+
+    func testApplyImportPreviewCreatesNestedFoldersAndAssignsImportedServer() async throws {
+        let manager = ServerManager.shared
+        let originalServers = manager.servers
+        let originalWorkspaces = manager.workspaces
+
+        defer {
+            manager.servers = originalServers
+            manager.workspaces = originalWorkspaces
+        }
+
+        manager.servers = []
+        manager.workspaces = []
+
+        let preview = ServerImportPreview(items: [
+            ImportedServerRecord(
+                source: .secureCRT,
+                workspaceName: "Production",
+                folderPath: ["Bastions", "EU"],
+                server: Server(
+                    workspaceId: UUID(),
+                    environment: .production,
+                    name: "Bastion EU",
+                    host: "eu-bastion.example.com",
+                    port: 22,
+                    username: "admin",
+                    authMethod: .sshKey
+                ),
+                credentials: ServerCredentials(serverId: UUID())
+            )
+        ])
+
+        let result = try await ServerImportManager.shared.applyImportPreview(preview, into: manager)
+
+        XCTAssertEqual(result.importedCount, 1)
+        let workspace = try XCTUnwrap(manager.workspaces.first(where: { $0.name == "Production" }))
+        let importedServer = try XCTUnwrap(manager.servers.first(where: { $0.name == "Bastion EU" }))
+        XCTAssertEqual(importedServer.workspaceId, workspace.id)
+
+        let folderPath = workspace.folderPathNames(for: importedServer.folderId)
+        XCTAssertEqual(folderPath, ["Bastions", "EU"])
     }
 }

@@ -8,6 +8,7 @@ struct ImportedServerRecord: Identifiable {
     let id = UUID()
     let source: ServerImportSource
     let workspaceName: String
+    let folderPath: [String]
     let server: Server
     let credentials: ServerCredentials
 }

@@ -163,6 +163,7 @@ struct iOSServerListView: View {
     @State private var environmentToDelete: ServerEnvironment?
     @State private var editingFolder: WorkspaceServerFolder?
     @State private var creatingFolderInWorkspace: Workspace?
+    @State private var creatingChildFolder: WorkspaceServerFolder?
     @State private var searchText = ""
     @State private var serverToEdit: Server?
     @State private var serverToMove: Server?
@@ -278,6 +279,18 @@ struct iOSServerListView: View {
                     selectedWorkspace = updatedWorkspace
                 }
             )
+        }
+        .sheet(item: $creatingChildFolder) { folder in
+            if let workspace = selectedWorkspace {
+                WorkspaceFolderFormSheet(
+                    serverManager: serverManager,
+                    workspace: workspace,
+                    parentFolder: folder,
+                    onSave: { updatedWorkspace in
+                        selectedWorkspace = updatedWorkspace
+                    }
+                )
+            }
         }
         .sheet(isPresented: $showingWorkspacePicker) {
             NavigationStack {
@@ -498,39 +511,8 @@ struct iOSServerListView: View {
                 }
 
                 ForEach(filteredFolderGroups, id: \.folder.id) { group in
-                    DisclosureGroup {
-                        ForEach(group.servers) { server in
-                            iOSServerRow(
-                                server: server,
-                                onTap: { onServerSelected(server) },
-                                onEdit: { serverToEdit = server },
-                                onMove: { serverToMove = server },
-                                onLockedTap: { lockedServerAlert = server }
-                            )
-                        }
-                    } label: {
-                        HStack {
-                            Label(group.folder.name, systemImage: "folder")
-                                .font(.subheadline.weight(.semibold))
-                            Spacer()
-                            Text(group.servers.count, format: .number)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .contextMenu {
-                        Button {
-                            editingFolder = group.folder
-                        } label: {
-                            Label(String(localized: "Edit Folder"), systemImage: "pencil")
-                        }
-
-                        Button(role: .destructive) {
-                            deleteFolder(group.folder)
-                        } label: {
-                            Label(String(localized: "Delete Folder"), systemImage: "trash")
-                        }
+                    if group.folder.parentId == nil {
+                        folderSection(group.folder, level: 0)
                     }
                 }
             }
@@ -642,17 +624,11 @@ struct iOSServerListView: View {
 
     private var filteredFolderGroups: [(folder: WorkspaceServerFolder, servers: [Server])] {
         guard let workspace = selectedWorkspace else { return [] }
-
-        return serverManager.folderedServers(in: workspace, environment: selectedEnvironment)
-            .map { group in
-                let servers = searchText.isEmpty ? group.servers : group.servers.filter {
-                    let lowercased = searchText.lowercased()
-                    return $0.name.lowercased().contains(lowercased) ||
-                        $0.host.lowercased().contains(lowercased)
-                }
-                return (group.folder, servers)
-            }
-            .filter { searchText.isEmpty || !$0.servers.isEmpty }
+        let groups = folderServerGroups(in: workspace)
+        let serversByFolderID = Dictionary(uniqueKeysWithValues: groups.map { ($0.folder.id, $0.servers) })
+        return groups.filter { group in
+            folderIsVisible(group.folder, in: workspace, serversByFolderID: serversByFolderID)
+        }
     }
 
     private var listRefreshIdentity: String {
@@ -724,6 +700,119 @@ struct iOSServerListView: View {
                 }
             }
         }
+    }
+
+    private func folderServerGroups(in workspace: Workspace) -> [(folder: WorkspaceServerFolder, servers: [Server])] {
+        serverManager.folderedServers(in: workspace, environment: selectedEnvironment)
+            .map { group in
+                let servers = searchText.isEmpty ? group.servers : group.servers.filter {
+                    let lowercased = searchText.lowercased()
+                    return $0.name.lowercased().contains(lowercased) ||
+                        $0.host.lowercased().contains(lowercased)
+                }
+                return (group.folder, servers)
+            }
+    }
+
+    private func folderSection(_ folder: WorkspaceServerFolder, level: Int) -> AnyView {
+        if let workspace = selectedWorkspace {
+            let servers = visibleServers(in: folder)
+            let childFolders = visibleChildFolders(of: folder, in: workspace)
+
+            return AnyView(DisclosureGroup {
+                ForEach(servers) { server in
+                    iOSServerRow(
+                        server: server,
+                        onTap: { onServerSelected(server) },
+                        onEdit: { serverToEdit = server },
+                        onMove: { serverToMove = server },
+                        onLockedTap: { lockedServerAlert = server }
+                    )
+                }
+
+                ForEach(childFolders, id: \.id) { childFolder in
+                    folderSection(childFolder, level: level + 1)
+                }
+            } label: {
+                HStack {
+                    Label(folder.name, systemImage: "folder")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text(servers.count, format: .number)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.leading, CGFloat(level) * 12)
+                .contentShape(Rectangle())
+            }
+            .contextMenu {
+                Button {
+                    creatingChildFolder = folder
+                } label: {
+                    Label(String(localized: "New Subfolder"), systemImage: "folder.badge.plus")
+                }
+
+                Button {
+                    editingFolder = folder
+                } label: {
+                    Label(String(localized: "Edit Folder"), systemImage: "pencil")
+                }
+
+                Button(role: .destructive) {
+                    deleteFolder(folder)
+                } label: {
+                    Label(String(localized: "Delete Folder"), systemImage: "trash")
+                }
+            }
+            )
+        } else {
+            return AnyView(EmptyView())
+        }
+    }
+
+    private func visibleServers(in folder: WorkspaceServerFolder) -> [Server] {
+        guard let workspace = selectedWorkspace else { return [] }
+        let serversByFolderID = Dictionary(uniqueKeysWithValues: folderServerGroups(in: workspace).map { ($0.folder.id, $0.servers) })
+        return serversByFolderID[folder.id] ?? []
+    }
+
+    private func visibleChildFolders(of folder: WorkspaceServerFolder, in workspace: Workspace) -> [WorkspaceServerFolder] {
+        let serversByFolderID = Dictionary(uniqueKeysWithValues: folderServerGroups(in: workspace).map { ($0.folder.id, $0.servers) })
+        workspace.childFolders(of: folder.id).filter { child in
+            folderIsVisible(child, in: workspace, serversByFolderID: serversByFolderID)
+        }
+    }
+
+    private func folderIsVisible(
+        _ folder: WorkspaceServerFolder,
+        in workspace: Workspace,
+        serversByFolderID: [UUID: [Server]]
+    ) -> Bool {
+        if !(serversByFolderID[folder.id] ?? []).isEmpty {
+            return true
+        }
+
+        if folderHasVisibleDescendants(folder, in: workspace, serversByFolderID: serversByFolderID) {
+            return true
+        }
+
+        return folderMatchesSearch(folder)
+    }
+
+    private func folderHasVisibleDescendants(
+        _ folder: WorkspaceServerFolder,
+        in workspace: Workspace,
+        serversByFolderID: [UUID: [Server]]
+    ) -> Bool {
+        workspace.childFolders(of: folder.id).contains { child in
+            folderIsVisible(child, in: workspace, serversByFolderID: serversByFolderID)
+        }
+    }
+
+    private func folderMatchesSearch(_ folder: WorkspaceServerFolder) -> Bool {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        return folder.name.localizedCaseInsensitiveContains(trimmed)
     }
 }
 

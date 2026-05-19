@@ -58,6 +58,57 @@ struct Workspace: Identifiable, Codable, Hashable {
         folders.first { $0.id == id }
     }
 
+    func childFolders(of parentId: UUID?) -> [WorkspaceServerFolder] {
+        folders
+            .filter { $0.parentId == parentId }
+            .sorted { lhs, rhs in
+                if lhs.order != rhs.order {
+                    return lhs.order < rhs.order
+                }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
+
+    func folderPath(for folderId: UUID?) -> [WorkspaceServerFolder] {
+        guard let folderId else { return [] }
+
+        var path: [WorkspaceServerFolder] = []
+        var currentId: UUID? = folderId
+        var visited = Set<UUID>()
+
+        while let activeFolderId = currentId,
+              !visited.contains(activeFolderId),
+              let folder = folder(withId: activeFolderId) {
+            path.append(folder)
+            visited.insert(activeFolderId)
+            currentId = folder.parentId
+        }
+
+        return path.reversed()
+    }
+
+    func folderPathNames(for folderId: UUID?) -> [String] {
+        folderPath(for: folderId).map(\.name)
+    }
+
+    func folderDisplayName(for folderId: UUID?, separator: String = " / ") -> String? {
+        let names = folderPathNames(for: folderId)
+        guard !names.isEmpty else { return nil }
+        return names.joined(separator: separator)
+    }
+
+    func descendantFolderIDs(of folderId: UUID) -> Set<UUID> {
+        var result = Set<UUID>()
+        var stack = childFolders(of: folderId).map(\.id)
+
+        while let nextId = stack.popLast() {
+            guard result.insert(nextId).inserted else { continue }
+            stack.append(contentsOf: childFolders(of: nextId).map(\.id))
+        }
+
+        return result
+    }
+
     static let defaultColors: [String] = [
         "#007AFF", // Blue (default)
         "#AF52DE", // Purple

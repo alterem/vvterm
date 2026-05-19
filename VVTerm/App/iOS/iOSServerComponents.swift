@@ -17,6 +17,7 @@ struct iOSServerRow: View {
 
     @ObservedObject private var serverManager = ServerManager.shared
     @Environment(\.privacyModeEnabled) private var privacyModeEnabled
+    @State private var showingDeleteConfirmation = false
 
     private var isLocked: Bool {
         serverManager.isServerLocked(server)
@@ -89,7 +90,7 @@ struct iOSServerRow: View {
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
-                Task { try? await ServerManager.shared.deleteServer(server) }
+                showingDeleteConfirmation = true
             } label: {
                 Label("Remove", systemImage: "trash")
             }
@@ -117,7 +118,7 @@ struct iOSServerRow: View {
                 }
 
                 Button(role: .destructive) {
-                    Task { try? await ServerManager.shared.deleteServer(server) }
+                    showingDeleteConfirmation = true
                 } label: {
                     Label("Remove", systemImage: "trash")
                 }
@@ -141,8 +142,49 @@ struct iOSServerRow: View {
                 } label: {
                     Label("Edit", systemImage: "pencil")
                 }
+
+                Button(role: .destructive) {
+                    showingDeleteConfirmation = true
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                }
             }
         }
+        .alert(String(localized: "Delete Server?"), isPresented: $showingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                Task { try? await ServerManager.shared.deleteServer(server) }
+            }
+        } message: {
+            Text(deleteWarningText)
+        }
+    }
+
+    private var deleteWarningText: String {
+        let referencingServers = serverManager.serversReferencingJumpHost(server.id)
+        guard let firstServer = referencingServers.first else {
+            return String(localized: "This will delete the server. This cannot be undone.")
+        }
+
+        let referenceMessage: String
+        if referencingServers.count == 1 {
+            referenceMessage = String(
+                format: String(localized: "This server is currently used as a jump host by %@."),
+                firstServer.name
+            )
+        } else {
+            referenceMessage = String(
+                format: String(localized: "This server is currently used as a jump host by %@ and %lld more."),
+                firstServer.name,
+                Int64(referencingServers.count - 1)
+            )
+        }
+
+        return [
+            String(localized: "This will delete the server. This cannot be undone."),
+            referenceMessage,
+            String(localized: "Deleting it will remove the jump host setting from the affected servers.")
+        ].joined(separator: " ")
     }
 }
 

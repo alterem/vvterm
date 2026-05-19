@@ -267,6 +267,7 @@
 "Add Folder" = "添加文件夹";
 "Add Server to Folder" = "在此文件夹中新建服务器";
 "Edit Folder" = "编辑文件夹";
+"New Subfolder" = "新建子文件夹";
 "New Folder" = "新建文件夹";
 "Delete Folder" = "删除文件夹";
 "Delete Folder?" = "删除文件夹？";
@@ -602,10 +603,16 @@
 "Upgrade to Pro for custom environments" = "升级到 Pro 以使用自定义环境";
 
 /* Misc */
+"Delete Server" = "删除服务器";
+"Delete Server?" = "删除服务器？";
 "Disconnect from server" = "断开服务器连接";
 "Disconnect from %@?" = "断开与 %@ 的连接？";
 "This will return to the server list." = "这将返回服务器列表。";
 "All terminal tabs for this server will be closed." = "该服务器的所有终端标签页将被关闭。";
+"This will delete the server. This cannot be undone." = "这将删除该服务器。此操作无法撤销。";
+"This server is currently used as a jump host by %@." = "这台服务器当前正被 %@ 用作跳板机。";
+"This server is currently used as a jump host by %@ and %lld more." = "这台服务器当前正被 %@ 和另外 %lld 台服务器用作跳板机。";
+"Deleting it will remove the jump host setting from the affected servers." = "删除后，会同时移除受影响服务器上的跳板机设置。";
 "Add Terminal Preset" = "添加终端预设";
 "Edit Preset" = "编辑预设";
 "Basic Information" = "基本信息";
@@ -741,10 +748,27 @@
 /* Server Form Placeholders */
 "My Server" = "我的服务器";
 "203.0.113.10" = "203.0.113.10";
+"203.0.113.20" = "203.0.113.20";
 "22" = "22";
 "root" = "root";
 "Required" = "必填";
 "Optional" = "可选";
+"Use Existing Server" = "使用现有服务器";
+"Create New Jump Host" = "新建跳板机";
+"Jump Host" = "跳板机";
+"Select a server..." = "选择服务器...";
+"Jump Host Name" = "跳板机名称";
+"Bastion" = "堡垒机";
+"Jump Host Host" = "跳板机主机";
+"Jump Host Username" = "跳板机用户名";
+"Jump Host Password" = "跳板机密码";
+"Jump Host Key Passphrase" = "跳板机密钥口令";
+"Route this server through a bastion host in the same workspace." = "通过同一工作区中的堡垒机转发此服务器连接。";
+"Jump host uses server-side Tailscale SSH policy." = "跳板机使用服务器端 Tailscale SSH 策略。";
+"Jump host listener cancelled" = "跳板机监听已取消";
+"Jump host server is missing" = "找不到跳板机服务器";
+"Server Group" = "服务器组";
+"%@ Group" = "%@ 组";
 "Tailscale SSH" = "Tailscale SSH";
 "Uses server-side Tailscale SSH policy. No password or SSH key is required." = "使用服务器端 Tailscale SSH 策略。无需密码或 SSH 密钥。";
 "Tailscale SSH authentication was not accepted by the server." = "服务器未接受 Tailscale SSH 身份验证。";

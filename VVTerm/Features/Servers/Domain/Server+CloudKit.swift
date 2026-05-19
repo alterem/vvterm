@@ -27,6 +27,13 @@ extension Server {
             folderId = nil
         }
 
+        let jumpHostServerId: UUID?
+        if let jumpHostServerIdString = record["jumpHostServerId"] as? String {
+            jumpHostServerId = UUID(uuidString: jumpHostServerIdString)
+        } else {
+            jumpHostServerId = nil
+        }
+
         guard let name = record["name"] as? String else {
             logger.error("Server \(id): missing name")
             return nil
@@ -77,6 +84,7 @@ extension Server {
         self.id = id
         self.workspaceId = workspaceId
         self.folderId = folderId
+        self.jumpHostServerId = jumpHostServerId
         self.name = name
         self.host = host
         self.port = port
@@ -115,6 +123,7 @@ extension Server {
 
         record["workspaceId"] = workspaceId.uuidString
         record["folderId"] = folderId?.uuidString
+        record["jumpHostServerId"] = jumpHostServerId?.uuidString
         record["name"] = name
         record["host"] = host
         record["port"] = port

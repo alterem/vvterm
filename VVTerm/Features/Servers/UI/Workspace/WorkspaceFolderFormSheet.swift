@@ -4,6 +4,7 @@ struct WorkspaceFolderFormSheet: View {
     @ObservedObject var serverManager: ServerManager
     let workspace: Workspace
     let folder: WorkspaceServerFolder?
+    let parentFolder: WorkspaceServerFolder?
     let onSave: (Workspace) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -20,11 +21,18 @@ struct WorkspaceFolderFormSheet: View {
         serverManager: ServerManager,
         workspace: Workspace,
         folder: WorkspaceServerFolder? = nil,
+        parentFolder: WorkspaceServerFolder? = nil,
         onSave: @escaping (Workspace) -> Void
     ) {
         self.serverManager = serverManager
         self.workspace = workspace
         self.folder = folder
+        if let folder,
+           let parentId = folder.parentId {
+            self.parentFolder = workspace.folder(withId: parentId)
+        } else {
+            self.parentFolder = parentFolder
+        }
         self.onSave = onSave
         _name = State(initialValue: folder?.name ?? "")
     }
@@ -40,6 +48,13 @@ struct WorkspaceFolderFormSheet: View {
                                 saveFolder()
                             }
                         }
+                }
+
+                if let parentFolder {
+                    Section("Location") {
+                        Text(serverManager.folderDisplayName(parentFolder, in: workspace))
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 if let error {
@@ -123,7 +138,11 @@ struct WorkspaceFolderFormSheet: View {
                         dismiss()
                     }
                 } else {
-                    _ = try await serverManager.createFolder(name: name, in: refreshedWorkspace)
+                    _ = try await serverManager.createFolder(
+                        name: name,
+                        in: refreshedWorkspace,
+                        parentId: parentFolder?.id
+                    )
                     let updatedWorkspace = serverManager.workspace(withId: refreshedWorkspace.id) ?? refreshedWorkspace
                     await MainActor.run {
                         onSave(updatedWorkspace)

@@ -344,6 +344,156 @@ final class ServerManager: ObservableObject {
         servers.removeAll { $0.id == serverID }
     }
 
+    private func validatedJumpHostServerId(
+        _ jumpHostServerId: UUID?,
+        for serverId: UUID,
+        in workspaceId: UUID
+    ) -> UUID? {
+        guard let jumpHostServerId else { return nil }
+        guard jumpHostServerId != serverId else { return nil }
+        guard let jumpHost = server(withId: jumpHostServerId),
+              jumpHost.workspaceId == workspaceId else {
+            return nil
+        }
+        guard !wouldIntroduceJumpHostCycle(serverId: serverId, jumpHostServerId: jumpHostServerId) else {
+            return nil
+        }
+        return jumpHostServerId
+    }
+
+    private func wouldIntroduceJumpHostCycle(serverId: UUID, jumpHostServerId: UUID) -> Bool {
+        var visited: Set<UUID> = [serverId]
+        var current = jumpHostServerId
+
+        while true {
+            if visited.contains(current) {
+                return true
+            }
+            visited.insert(current)
+
+            guard let next = server(withId: current)?.jumpHostServerId else {
+                return false
+            }
+            current = next
+        }
+    }
+
+    private func clearJumpHostReferences(to deletedServerId: UUID) async {
+        let affectedServers = servers.filter { $0.jumpHostServerId == deletedServerId }
+        guard !affectedServers.isEmpty else { return }
+
+        for server in affectedServers {
+            var updatedServer = server
+            updatedServer.jumpHostServerId = nil
+            updatedServer.updatedAt = Date()
+            try? await updateServer(updatedServer)
+        }
+    }
+
+    func availableJumpHosts(
+        in workspace: Workspace?,
+        excluding serverId: UUID?
+    ) -> [Server] {
+        guard let workspace else { return [] }
+        return servers
+            .filter {
+                $0.workspaceId == workspace.id &&
+                $0.id != serverId &&
+                canUseJumpHost($0, for: serverId)
+            }
+            .sorted { lhs, rhs in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
+
+    func canUseJumpHost(_ candidate: Server, for serverId: UUID?) -> Bool {
+        guard let serverId else { return true }
+        return candidate.id != serverId &&
+            !wouldIntroduceJumpHostCycle(serverId: serverId, jumpHostServerId: candidate.id)
+    }
+
+    func serversReferencingJumpHost(_ jumpHostServerId: UUID) -> [Server] {
+        servers
+            .filter { $0.jumpHostServerId == jumpHostServerId }
+            .sorted { lhs, rhs in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
+
+    func ensureServerAndJumpHostShareFolder(
+        serverId: UUID,
+        jumpHostServerId: UUID
+    ) async throws {
+        guard let targetServer = server(withId: serverId),
+              let jumpHost = server(withId: jumpHostServerId),
+              targetServer.workspaceId == jumpHost.workspaceId,
+              let workspace = workspace(withId: targetServer.workspaceId),
+              let targetFolderId = try await groupedFolderIdForServerAndJumpHost(
+                server: targetServer,
+                jumpHost: jumpHost,
+                in: workspace
+              ) else {
+            return
+        }
+
+        if targetServer.folderId != targetFolderId {
+            var updatedServer = targetServer
+            updatedServer.folderId = targetFolderId
+            try await updateServer(updatedServer)
+        }
+
+        if jumpHost.folderId != targetFolderId {
+            var updatedJumpHost = jumpHost
+            updatedJumpHost.folderId = targetFolderId
+            try await updateServer(updatedJumpHost)
+        }
+    }
+
+    func groupedFolderIdForServerAndJumpHost(
+        server: Server,
+        jumpHost: Server,
+        in workspace: Workspace
+    ) async throws -> UUID? {
+        if let folderId = server.folderId,
+           workspace.folder(withId: folderId) != nil {
+            return folderId
+        }
+
+        if let folderId = jumpHost.folderId,
+           workspace.folder(withId: folderId) != nil {
+            return folderId
+        }
+
+        let baseName = server.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? jumpHost.name
+            : server.name
+        let trimmedBaseName = baseName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let preferredName = trimmedBaseName.isEmpty
+            ? String(localized: "Server Group")
+            : String(format: String(localized: "%@ Group"), trimmedBaseName)
+
+        let folder = try await createFolder(name: uniqueFolderName(preferredName, in: workspace), in: workspace)
+        return folder.id
+    }
+
+    private func uniqueFolderName(_ baseName: String, in workspace: Workspace) -> String {
+        let trimmedBaseName = baseName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let seed = trimmedBaseName.isEmpty ? String(localized: "Server Group") : trimmedBaseName
+        let existingNames = Set(workspace.folders.map { $0.name.lowercased() })
+        guard existingNames.contains(seed.lowercased()) else {
+            return seed
+        }
+
+        var index = 2
+        while true {
+            let candidate = "\(seed) \(index)"
+            if !existingNames.contains(candidate.lowercased()) {
+                return candidate
+            }
+            index += 1
+        }
+    }
+
     private func applyPendingWorkspaceUpsert(_ workspace: Workspace) {
         let normalized = normalizedWorkspace(workspace)
         if let index = workspaces.firstIndex(where: { $0.id == workspace.id }) {
@@ -813,6 +963,7 @@ final class ServerManager: ObservableObject {
                     id: servers[i].id,
                     workspaceId: defaultWorkspace.id,
                     folderId: nil,
+                    jumpHostServerId: nil,
                     environment: servers[i].environment,
                     name: servers[i].name,
                     host: servers[i].host,
@@ -911,6 +1062,7 @@ final class ServerManager: ObservableObject {
             id: server.id,
             workspaceId: server.workspaceId,
             folderId: validatedFolderId(server.folderId, in: server.workspaceId),
+            jumpHostServerId: validatedJumpHostServerId(server.jumpHostServerId, for: server.id, in: server.workspaceId),
             environment: server.environment,
             name: server.name,
             host: server.host,
@@ -963,6 +1115,7 @@ final class ServerManager: ObservableObject {
             id: server.id,
             workspaceId: server.workspaceId,
             folderId: validatedFolderId(server.folderId, in: server.workspaceId),
+            jumpHostServerId: validatedJumpHostServerId(server.jumpHostServerId, for: server.id, in: server.workspaceId),
             environment: server.environment,
             name: server.name,
             host: server.host,
@@ -998,6 +1151,7 @@ final class ServerManager: ObservableObject {
         servers.removeAll { $0.id == server.id }
         enqueuePendingServerDelete(server)
         await persistLocalMutations(logMessage: "Deleted server: \(server.name)")
+        await clearJumpHostReferences(to: server.id)
     }
 
     func updateLastConnected(for server: Server) async {
@@ -1006,6 +1160,7 @@ final class ServerManager: ObservableObject {
             id: server.id,
             workspaceId: server.workspaceId,
             folderId: server.folderId,
+            jumpHostServerId: server.jumpHostServerId,
             environment: server.environment,
             name: server.name,
             host: server.host,
@@ -1156,6 +1311,10 @@ final class ServerManager: ObservableObject {
         }
     }
 
+    func folderDisplayName(_ folder: WorkspaceServerFolder, in workspace: Workspace, separator: String = " / ") -> String {
+        workspace.folderDisplayName(for: folder.id, separator: separator) ?? folder.name
+    }
+
     func recentServers(limit: Int = 5) -> [Server] {
         servers
             .filter { $0.lastConnected != nil }
@@ -1182,6 +1341,11 @@ final class ServerManager: ObservableObject {
     func workspace(withId id: UUID?) -> Workspace? {
         guard let id else { return nil }
         return workspaces.first { $0.id == id }
+    }
+
+    func server(withId id: UUID?) -> Server? {
+        guard let id else { return nil }
+        return servers.first { $0.id == id }
     }
 
     func assignmentWorkspaces(for server: Server?) -> [Workspace] {
@@ -1445,19 +1609,30 @@ final class ServerManager: ObservableObject {
         return updatedWorkspace
     }
 
-    func createFolder(name: String, in workspace: Workspace) async throws -> WorkspaceServerFolder {
+    func createFolder(
+        name: String,
+        in workspace: Workspace,
+        parentId: UUID? = nil
+    ) async throws -> WorkspaceServerFolder {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
             throw VVTermError.validation(String(localized: "Folder name can't be empty."))
         }
 
-        if workspace.folders.contains(where: { $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame }) {
+        guard parentId == nil || workspace.folder(withId: parentId!) != nil else {
+            throw VVTermError.validation(String(localized: "The selected parent folder no longer exists."))
+        }
+
+        if workspace.folders.contains(where: {
+            $0.parentId == parentId && $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
+        }) {
             throw VVTermError.validation(String(localized: "A folder with this name already exists in this workspace."))
         }
 
         let folder = WorkspaceServerFolder(
+            parentId: parentId,
             name: trimmedName,
-            order: workspace.folders.count
+            order: siblingOrder(in: workspace.folders, parentId: parentId)
         )
 
         var updatedWorkspace = workspace
@@ -1472,8 +1647,14 @@ final class ServerManager: ObservableObject {
             throw VVTermError.validation(String(localized: "Folder name can't be empty."))
         }
 
+        guard folder.parentId == nil || workspace.folder(withId: folder.parentId!) != nil else {
+            throw VVTermError.validation(String(localized: "The selected parent folder no longer exists."))
+        }
+
         if workspace.folders.contains(where: {
-            $0.id != folder.id && $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
+            $0.id != folder.id &&
+            $0.parentId == folder.parentId &&
+            $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
         }) {
             throw VVTermError.validation(String(localized: "A folder with this name already exists in this workspace."))
         }
@@ -1494,11 +1675,16 @@ final class ServerManager: ObservableObject {
 
     func deleteFolder(_ folder: WorkspaceServerFolder, in workspace: Workspace) async throws -> Workspace {
         var updatedWorkspace = workspace
-        updatedWorkspace.folders.removeAll { $0.id == folder.id }
+        let descendantIds = workspace.descendantFolderIDs(of: folder.id)
+        let removedIds = descendantIds.union([folder.id])
+        updatedWorkspace.folders.removeAll { removedIds.contains($0.id) }
         updatedWorkspace.folders = normalizedFolders(updatedWorkspace.folders)
         try await updateWorkspace(updatedWorkspace)
 
-        let affectedServers = servers.filter { $0.workspaceId == workspace.id && $0.folderId == folder.id }
+        let affectedServers = servers.filter { server in
+            server.workspaceId == workspace.id &&
+            server.folderId.map { removedIds.contains($0) } == true
+        }
         for server in affectedServers {
             var updatedServer = server
             updatedServer.folderId = nil
@@ -1537,6 +1723,11 @@ final class ServerManager: ObservableObject {
     private func normalizedServer(_ server: Server) -> Server {
         var normalized = server
         normalized.folderId = validatedFolderId(server.folderId, in: server.workspaceId)
+        normalized.jumpHostServerId = validatedJumpHostServerId(
+            server.jumpHostServerId,
+            for: server.id,
+            in: server.workspaceId
+        )
         return normalized
     }
 
@@ -1546,18 +1737,53 @@ final class ServerManager: ObservableObject {
             folderMap[folder.id] = folder
         }
 
-        return folderMap.values.sorted { lhs, rhs in
-            if lhs.order != rhs.order {
-                return lhs.order < rhs.order
-            }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
-        .enumerated()
-        .map { index, folder in
+        let validParentIds = Set(folderMap.keys)
+        let sanitized = folderMap.values.map { folder -> WorkspaceServerFolder in
             var updated = folder
-            updated.order = index
+            if let parentId = updated.parentId, !validParentIds.contains(parentId) || parentId == updated.id {
+                updated.parentId = nil
+            }
             return updated
         }
+
+        var childrenByParent: [UUID?: [WorkspaceServerFolder]] = Dictionary(grouping: sanitized, by: \.parentId)
+        for key in childrenByParent.keys {
+            childrenByParent[key] = childrenByParent[key]?.sorted { lhs, rhs in
+                if lhs.order != rhs.order {
+                    return lhs.order < rhs.order
+                }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+        }
+
+        var normalized: [WorkspaceServerFolder] = []
+        var visited = Set<UUID>()
+
+        func appendChildren(of parentId: UUID?) {
+            guard let children = childrenByParent[parentId] else { return }
+            for (index, child) in children.enumerated() {
+                guard visited.insert(child.id).inserted else { continue }
+                var updated = child
+                updated.order = index
+                normalized.append(updated)
+                appendChildren(of: child.id)
+            }
+        }
+
+        appendChildren(of: nil)
+
+        for folder in sanitized where !visited.contains(folder.id) {
+            var updated = folder
+            updated.parentId = nil
+            normalized.append(updated)
+            appendChildren(of: folder.id)
+        }
+
+        return normalized
+    }
+
+    private func siblingOrder(in folders: [WorkspaceServerFolder], parentId: UUID?) -> Int {
+        folders.filter { $0.parentId == parentId }.count
     }
 
     private func validatedFolderId(_ folderId: UUID?, in workspaceId: UUID) -> UUID? {

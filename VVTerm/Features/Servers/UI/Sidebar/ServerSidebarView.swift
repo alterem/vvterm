@@ -26,6 +26,7 @@ struct ServerSidebarView: View {
     @State private var serverToMove: Server?
     @State private var lockedServerAlert: Server?
     @State private var editingFolder: WorkspaceServerFolder?
+    @State private var creatingChildFolder: WorkspaceServerFolder?
     @State private var isCreatingFolderInline = false
     @State private var newFolderName = ""
     @State private var createFolderError: String?
@@ -124,9 +125,11 @@ struct ServerSidebarView: View {
 
     private var filteredFolderGroups: [(folder: WorkspaceServerFolder, servers: [Server])] {
         guard let workspace = selectedWorkspace else { return [] }
-        return serverManager.folderedServers(in: workspace, environment: nil)
-            .map { ($0.folder, $0.servers.filter(matchesFilters)) }
-            .filter { searchText.isEmpty || !$0.servers.isEmpty }
+        let groups = folderServerGroups(in: workspace)
+        let serversByFolderID = Dictionary(uniqueKeysWithValues: groups.map { ($0.folder.id, $0.servers) })
+        return groups.filter { group in
+            folderIsVisible(group.folder, in: workspace, serversByFolderID: serversByFolderID)
+        }
     }
 
     private var hasFilteredServers: Bool {
@@ -194,7 +197,9 @@ struct ServerSidebarView: View {
                         }
 
                         ForEach(filteredFolderGroups, id: \.folder.id) { group in
-                            folderGroupView(folder: group.folder, servers: group.servers)
+                            if group.folder.parentId == nil {
+                                folderGroupView(folder: group.folder, level: 0)
+                            }
                         }
                     }
                     .padding(.horizontal, 12)
@@ -306,6 +311,20 @@ struct ServerSidebarView: View {
                     folder: folder,
                     onSave: { updatedWorkspace in
                         selectedWorkspace = updatedWorkspace
+                    }
+                )
+                .frame(minWidth: 420, idealWidth: 460, maxWidth: 520, minHeight: 260, idealHeight: 320, maxHeight: 380)
+            }
+        }
+        .sheet(item: $creatingChildFolder) { folder in
+            if let workspace = selectedWorkspace {
+                WorkspaceFolderFormSheet(
+                    serverManager: serverManager,
+                    workspace: workspace,
+                    parentFolder: folder,
+                    onSave: { updatedWorkspace in
+                        selectedWorkspace = updatedWorkspace
+                        expandedFolderIDs.insert(folder.id)
                     }
                 )
                 .frame(minWidth: 420, idealWidth: 460, maxWidth: 520, minHeight: 260, idealHeight: 320, maxHeight: 380)
@@ -696,79 +715,100 @@ struct ServerSidebarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder
-    private func folderGroupView(folder: WorkspaceServerFolder, servers: [Server]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Button {
-                    toggleFolder(folder.id)
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: expandedFolderIDs.contains(folder.id) ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 10)
+    private func folderGroupView(folder: WorkspaceServerFolder, level: Int) -> AnyView {
+        if let workspace = selectedWorkspace {
+            let servers = visibleServers(in: folder)
+            let childFolders = visibleChildFolders(of: folder, in: workspace)
+            let shouldShowDisclosure = !servers.isEmpty || !childFolders.isEmpty
 
-                        Image(systemName: "folder")
-                            .foregroundStyle(.secondary)
+            return AnyView(VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Button {
+                        if shouldShowDisclosure {
+                            toggleFolder(folder.id)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: expandedFolderIDs.contains(folder.id) ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 10)
+                                .opacity(shouldShowDisclosure ? 1 : 0)
 
-                        Text(folder.name)
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
+                            Image(systemName: "folder")
+                                .foregroundStyle(.secondary)
 
-                        PillBadge(text: "\(servers.count)", color: .secondary)
+                            Text(folder.name)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.secondary)
+
+                            PillBadge(text: "\(servers.count)", color: .secondary)
+                        }
                     }
-                }
-                .buttonStyle(.plain)
+                    .buttonStyle(.plain)
 
-                Spacer(minLength: 8)
+                    Spacer(minLength: 8)
 
-                Menu {
+                    Menu {
                     Button {
                         presentAddServer(in: folder)
                     } label: {
-                        Label("Add Server to Folder", systemImage: "plus")
+                        Label(String(localized: "Add Server to Folder"), systemImage: "plus")
+                    }
+
+                    Button {
+                        creatingChildFolder = folder
+                    } label: {
+                        Label(String(localized: "New Subfolder"), systemImage: "folder.badge.plus")
                     }
 
                     Button {
                         editingFolder = folder
                     } label: {
-                        Label("Edit Folder", systemImage: "pencil")
-                    }
+                        Label(String(localized: "Edit Folder"), systemImage: "pencil")
+                        }
 
-                    Button(role: .destructive) {
-                        deleteFolder(folder)
+                        Button(role: .destructive) {
+                            deleteFolder(folder)
+                        } label: {
+                            Label(String(localized: "Delete Folder"), systemImage: "trash")
+                        }
                     } label: {
-                        Label("Delete Folder", systemImage: "trash")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 6)
-
-            if expandedFolderIDs.contains(folder.id) {
-                VStack(spacing: 4) {
-                    ForEach(servers) { server in
-                        serverRow(for: server)
-                            .padding(.leading, 16)
-                    }
-
-                    if servers.isEmpty {
-                        Text("No servers in this folder.")
-                            .font(.caption)
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
-                            .padding(.leading, 24)
-                            .padding(.vertical, 6)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                }
+                .padding(.leading, CGFloat(level * 16) + 8)
+                .padding(.trailing, 8)
+                .padding(.top, 6)
+
+                if expandedFolderIDs.contains(folder.id) {
+                    VStack(spacing: 4) {
+                        ForEach(servers) { server in
+                            serverRow(for: server)
+                                .padding(.leading, CGFloat((level + 1) * 16))
+                        }
+
+                        ForEach(childFolders, id: \.id) { childFolder in
+                            folderGroupView(folder: childFolder, level: level + 1)
+                        }
+
+                        if servers.isEmpty && childFolders.isEmpty {
+                            Text("No servers in this folder.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, CGFloat((level + 1) * 16) + 8)
+                                .padding(.vertical, 6)
+                        }
                     }
                 }
-            }
+            })
+        } else {
+            return AnyView(EmptyView())
         }
     }
 
@@ -1033,6 +1073,56 @@ struct ServerSidebarView: View {
         }
 
         return true
+    }
+
+    private func folderServerGroups(in workspace: Workspace) -> [(folder: WorkspaceServerFolder, servers: [Server])] {
+        serverManager.folderedServers(in: workspace, environment: nil)
+            .map { ($0.folder, $0.servers.filter(matchesFilters)) }
+    }
+
+    private func visibleServers(in folder: WorkspaceServerFolder) -> [Server] {
+        guard let workspace = selectedWorkspace else { return [] }
+        let serversByFolderID = Dictionary(uniqueKeysWithValues: folderServerGroups(in: workspace).map { ($0.folder.id, $0.servers) })
+        return serversByFolderID[folder.id] ?? []
+    }
+
+    private func visibleChildFolders(of folder: WorkspaceServerFolder, in workspace: Workspace) -> [WorkspaceServerFolder] {
+        let serversByFolderID = Dictionary(uniqueKeysWithValues: folderServerGroups(in: workspace).map { ($0.folder.id, $0.servers) })
+        return workspace.childFolders(of: folder.id).filter { child in
+            folderIsVisible(child, in: workspace, serversByFolderID: serversByFolderID)
+        }
+    }
+
+    private func folderIsVisible(
+        _ folder: WorkspaceServerFolder,
+        in workspace: Workspace,
+        serversByFolderID: [UUID: [Server]]
+    ) -> Bool {
+        if !(serversByFolderID[folder.id] ?? []).isEmpty {
+            return true
+        }
+
+        if folderHasVisibleDescendants(folder, in: workspace, serversByFolderID: serversByFolderID) {
+            return true
+        }
+
+        return folderMatchesSearch(folder)
+    }
+
+    private func folderHasVisibleDescendants(
+        _ folder: WorkspaceServerFolder,
+        in workspace: Workspace,
+        serversByFolderID: [UUID: [Server]]
+    ) -> Bool {
+        workspace.childFolders(of: folder.id).contains { child in
+            folderIsVisible(child, in: workspace, serversByFolderID: serversByFolderID)
+        }
+    }
+
+    private func folderMatchesSearch(_ folder: WorkspaceServerFolder) -> Bool {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        return folder.name.localizedCaseInsensitiveContains(trimmed)
     }
 
     private func toggleFolder(_ folderID: UUID) {

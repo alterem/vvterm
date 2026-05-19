@@ -113,6 +113,25 @@ struct ServerFormCredentialBuilder {
 // MARK: - Server Form Sheet
 
 struct ServerFormSheet: View {
+    private enum JumpHostMode: String, CaseIterable, Identifiable {
+        case none
+        case existing
+        case createNew
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .none:
+                return String(localized: "Off")
+            case .existing:
+                return String(localized: "Use Existing Server")
+            case .createNew:
+                return String(localized: "Create New Jump Host")
+            }
+        }
+    }
+
     @ObservedObject var serverManager: ServerManager
     @ObservedObject private var storeManager = StoreManager.shared
     @EnvironmentObject private var appLockManager: AppLockManager
@@ -140,6 +159,8 @@ struct ServerFormSheet: View {
     @State private var showCloudflareOverrides: Bool = false
     @State private var selectedWorkspaceId: UUID?
     @State private var selectedFolderId: UUID?
+    @State private var jumpHostMode: JumpHostMode = .none
+    @State private var selectedJumpHostServerId: UUID?
     @State private var selectedEnvironment: ServerEnvironment = .production
     @State private var notes: String = ""
     @State private var requiresBiometricUnlock: Bool = false
@@ -160,6 +181,17 @@ struct ServerFormSheet: View {
     @State private var connectionTestSucceeded = false
     @State private var lastTestSnapshot: ConnectionTestSnapshot?
     @State private var showingLocalDiscoverySheet = false
+    @State private var creatingJumpHost = false
+    @State private var jumpHostName: String = ""
+    @State private var jumpHostHost: String = ""
+    @State private var jumpHostPort: String = "22"
+    @State private var jumpHostUsername: String = ""
+    @State private var jumpHostTransportSelection: ServerTransportSelection = .standard
+    @State private var jumpHostAuthMethod: AuthMethod = .password
+    @State private var jumpHostPassword: String = ""
+    @State private var jumpHostSSHKey: String = ""
+    @State private var jumpHostSSHPassphrase: String = ""
+    @State private var jumpHostSSHPublicKey: String = ""
 
     private var isEditing: Bool { server != nil }
 
@@ -179,6 +211,7 @@ struct ServerFormSheet: View {
         let initialWorkspaceId = server?.workspaceId ?? prefill?.preferredWorkspaceId ?? workspace?.id
         _selectedWorkspaceId = State(initialValue: initialWorkspaceId)
         _selectedFolderId = State(initialValue: server?.folderId ?? prefill?.preferredFolderId)
+        _selectedJumpHostServerId = State(initialValue: server?.jumpHostServerId)
 
         if let server = server {
             _name = State(initialValue: server.name)
@@ -197,6 +230,7 @@ struct ServerFormSheet: View {
             _requiresBiometricUnlock = State(initialValue: server.requiresBiometricUnlock)
             _tmuxEnabled = State(initialValue: server.tmuxEnabledOverride ?? Self.defaultTmuxEnabled())
             _tmuxStartupBehavior = State(initialValue: server.tmuxStartupBehaviorOverride ?? Self.defaultTmuxStartupBehavior())
+            _jumpHostMode = State(initialValue: server.jumpHostServerId == nil ? .none : .existing)
         } else if let prefill {
             _name = State(initialValue: prefill.name)
             _host = State(initialValue: prefill.host)
@@ -262,6 +296,19 @@ struct ServerFormSheet: View {
         } ?? []
     }
 
+    private func folderLabel(_ folder: WorkspaceServerFolder, in workspace: Workspace?) -> String {
+        guard let workspace else { return folder.name }
+        return serverManager.folderDisplayName(folder, in: workspace)
+    }
+
+    private var availableJumpHosts: [Server] {
+        serverManager.availableJumpHosts(in: selectedWorkspace, excluding: server?.id)
+    }
+
+    private var selectedJumpHostServer: Server? {
+        availableJumpHosts.first { $0.id == selectedJumpHostServerId }
+    }
+
     private var workspaceAvailabilityHelpText: String? {
         guard assignmentWorkspaces.count <= 1 else {
             return nil
@@ -284,6 +331,8 @@ struct ServerFormSheet: View {
         let username: String
         let transportSelection: ServerTransportSelection
         let authMethod: AuthMethod
+        let jumpHostMode: JumpHostMode
+        let jumpHostServerId: UUID?
         let password: String
         let sshKey: String
         let sshPassphrase: String
@@ -301,6 +350,8 @@ struct ServerFormSheet: View {
             username: effectiveUsername,
             transportSelection: transportSelection,
             authMethod: selectedAuthMethod,
+            jumpHostMode: jumpHostMode,
+            jumpHostServerId: selectedJumpHostServerId,
             password: password,
             sshKey: sshKey,
             sshPassphrase: sshPassphrase,
@@ -348,6 +399,7 @@ struct ServerFormSheet: View {
             limitSection
             serverSection
             authSection
+            jumpHostSection
             connectionSection
             sessionSection
             securitySection
@@ -476,6 +528,15 @@ struct ServerFormSheet: View {
             .onChange(of: selectedFolderId) { _ in
                 resetConnectionTestState()
             }
+            .onChange(of: jumpHostMode) { mode in
+                if mode != .existing {
+                    selectedJumpHostServerId = nil
+                }
+                resetConnectionTestState()
+            }
+            .onChange(of: selectedJumpHostServerId) { _ in
+                resetConnectionTestState()
+            }
             .onChange(of: password) { _ in resetConnectionTestState() }
             .onChange(of: sshKey) { _ in
                 if let programmaticSSHKeyValue,
@@ -493,6 +554,16 @@ struct ServerFormSheet: View {
             .onChange(of: cloudflareClientID) { _ in resetConnectionTestState() }
             .onChange(of: cloudflareClientSecret) { _ in resetConnectionTestState() }
             .onChange(of: cloudflareTeamDomainOverride) { _ in resetConnectionTestState() }
+            .onChange(of: jumpHostName) { _ in resetConnectionTestState() }
+            .onChange(of: jumpHostHost) { _ in resetConnectionTestState() }
+            .onChange(of: jumpHostPort) { _ in resetConnectionTestState() }
+            .onChange(of: jumpHostUsername) { _ in resetConnectionTestState() }
+            .onChange(of: jumpHostTransportSelection) { _ in resetConnectionTestState() }
+            .onChange(of: jumpHostAuthMethod) { _ in resetConnectionTestState() }
+            .onChange(of: jumpHostPassword) { _ in resetConnectionTestState() }
+            .onChange(of: jumpHostSSHKey) { _ in resetConnectionTestState() }
+            .onChange(of: jumpHostSSHPassphrase) { _ in resetConnectionTestState() }
+            .onChange(of: jumpHostSSHPublicKey) { _ in resetConnectionTestState() }
     }
 
     #if os(macOS)
@@ -587,7 +658,7 @@ struct ServerFormSheet: View {
                     .tag(Optional<UUID>.none)
 
                 ForEach(availableFolders) { folder in
-                    Text(folder.name)
+                    Text(folderLabel(folder, in: selectedWorkspace))
                         .tag(Optional(folder.id))
                 }
             }
@@ -760,6 +831,101 @@ struct ServerFormSheet: View {
             }
         } header: {
             sectionHeader("Authentication")
+        }
+    }
+
+    @ViewBuilder
+    private var jumpHostSection: some View {
+        Section {
+            Picker("Jump Host", selection: $jumpHostMode) {
+                ForEach(JumpHostMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+
+            switch jumpHostMode {
+            case .none:
+                EmptyView()
+
+            case .existing:
+                Picker("Server", selection: $selectedJumpHostServerId) {
+                    Text("Select a server...").tag(Optional<UUID>.none)
+                    ForEach(availableJumpHosts) { jumpHost in
+                        Text(jumpHost.name).tag(Optional(jumpHost.id))
+                    }
+                }
+
+                if let selectedJumpHostServer {
+                    Text(selectedJumpHostServer.displayAddress)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+            case .createNew:
+                TextField("Jump Host Name", text: $jumpHostName, prompt: Text(String(localized: "Bastion")))
+
+                HStack(spacing: 12) {
+                    TextField("Jump Host Host", text: $jumpHostHost, prompt: Text(String(localized: "203.0.113.20")))
+                        .autocorrectionDisabled()
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        #endif
+
+                    TextField("Port", text: $jumpHostPort, prompt: Text(String(localized: "22")))
+                        #if os(iOS)
+                        .keyboardType(.numberPad)
+                        #endif
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 76)
+                }
+
+                TextField("Jump Host Username", text: $jumpHostUsername, prompt: Text(String(localized: "root")))
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+
+                Picker("Transport", selection: $jumpHostTransportSelection) {
+                    ForEach(ServerTransportSelection.allCases) { transport in
+                        Label(transport.displayName, systemImage: transport.icon)
+                            .tag(transport)
+                    }
+                }
+
+                if jumpHostTransportSelection != .tailscale {
+                    Picker("Method", selection: $jumpHostAuthMethod) {
+                        ForEach(AuthMethod.allCases) { method in
+                            Label(method.displayName, systemImage: method.icon)
+                                .tag(method)
+                        }
+                    }
+
+                    switch jumpHostAuthMethod {
+                    case .password:
+                        SecureField("Jump Host Password", text: $jumpHostPassword, prompt: Text(String(localized: "Required")))
+                    case .sshKey:
+                        TextEditor(text: $jumpHostSSHKey)
+                            .frame(minHeight: 96)
+                        TextEditor(text: $jumpHostSSHPublicKey)
+                            .frame(minHeight: 60)
+                    case .sshKeyWithPassphrase:
+                        TextEditor(text: $jumpHostSSHKey)
+                            .frame(minHeight: 96)
+                        SecureField("Jump Host Key Passphrase", text: $jumpHostSSHPassphrase, prompt: Text(String(localized: "Required")))
+                        TextEditor(text: $jumpHostSSHPublicKey)
+                            .frame(minHeight: 60)
+                    }
+                } else {
+                    Text(String(localized: "Jump host uses server-side Tailscale SSH policy."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            sectionHeader("Jump Host")
+        } footer: {
+            Text("Route this server through a bastion host in the same workspace.")
         }
     }
 
@@ -978,7 +1144,7 @@ struct ServerFormSheet: View {
 
     private var hasValidCredentials: Bool {
         guard transportSelection != .tailscale else {
-            return true
+            return hasValidJumpHostConfiguration
         }
 
         if transportSelection == .cloudflare {
@@ -995,11 +1161,40 @@ struct ServerFormSheet: View {
 
         switch selectedAuthMethod {
         case .password:
-            return !password.isEmpty
+            return !password.isEmpty && hasValidJumpHostConfiguration
         case .sshKey:
-            return !sshKey.isEmpty
+            return !sshKey.isEmpty && hasValidJumpHostConfiguration
         case .sshKeyWithPassphrase:
-            return !sshKey.isEmpty && !sshPassphrase.isEmpty
+            return !sshKey.isEmpty && !sshPassphrase.isEmpty && hasValidJumpHostConfiguration
+        }
+    }
+
+    private var hasValidJumpHostConfiguration: Bool {
+        switch jumpHostMode {
+        case .none:
+            return true
+        case .existing:
+            return selectedJumpHostServerId != nil
+        case .createNew:
+            guard !jumpHostName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !jumpHostHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  Int(jumpHostPort) != nil else {
+                return false
+            }
+
+            if jumpHostTransportSelection == .tailscale {
+                return true
+            }
+
+            switch jumpHostAuthMethod {
+            case .password:
+                return !jumpHostPassword.isEmpty
+            case .sshKey:
+                return !jumpHostSSHKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .sshKeyWithPassphrase:
+                return !jumpHostSSHKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                    !jumpHostSSHPassphrase.isEmpty
+            }
         }
     }
 
@@ -1017,6 +1212,7 @@ struct ServerFormSheet: View {
             id: id,
             workspaceId: selectedWorkspace?.id ?? assignmentWorkspaces.first?.id ?? serverManager.workspaces.first?.id ?? UUID(),
             folderId: selectedFolderId,
+            jumpHostServerId: jumpHostMode == .existing ? selectedJumpHostServerId : nil,
             environment: selectedEnvironment,
             name: name,
             host: host,
@@ -1035,8 +1231,29 @@ struct ServerFormSheet: View {
         )
     }
 
+    private func buildJumpHostServer(id: UUID, workspaceId: UUID, folderId: UUID?) -> Server {
+        let portNumber = Int(jumpHostPort) ?? 22
+        return Server(
+            id: id,
+            workspaceId: workspaceId,
+            folderId: folderId,
+            environment: selectedEnvironment,
+            name: jumpHostName.trimmingCharacters(in: .whitespacesAndNewlines),
+            host: jumpHostHost.trimmingCharacters(in: .whitespacesAndNewlines),
+            port: portNumber,
+            username: effectiveJumpHostUsername,
+            connectionMode: jumpHostTransportSelection.connectionMode,
+            authMethod: jumpHostTransportSelection == .tailscale ? .password : jumpHostAuthMethod
+        )
+    }
+
     private var effectiveUsername: String {
         let trimmed = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "root" : trimmed
+    }
+
+    private var effectiveJumpHostUsername: String {
+        let trimmed = jumpHostUsername.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "root" : trimmed
     }
 
@@ -1082,6 +1299,21 @@ struct ServerFormSheet: View {
         )
     }
 
+    private func buildJumpHostCredentials(for serverId: UUID) -> ServerCredentials {
+        ServerFormCredentialBuilder.build(
+            serverId: serverId,
+            transportSelection: jumpHostTransportSelection,
+            authMethod: jumpHostAuthMethod,
+            password: jumpHostPassword,
+            sshKey: jumpHostSSHKey,
+            sshPassphrase: jumpHostSSHPassphrase,
+            sshPublicKey: jumpHostSSHPublicKey,
+            cloudflareAccessMode: nil,
+            cloudflareClientID: "",
+            cloudflareClientSecret: ""
+        )
+    }
+
     private func normalizedCloudflareOverride(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
@@ -1114,6 +1346,38 @@ struct ServerFormSheet: View {
             preferredEnvironment: selectedEnvironment,
             destination: selectedWorkspace
         )
+
+        if jumpHostMode == .existing,
+           let selectedJumpHostServerId,
+           !availableJumpHosts.contains(where: { $0.id == selectedJumpHostServerId }) {
+            self.selectedJumpHostServerId = nil
+        }
+    }
+
+    private func resolveJumpHostServerId(
+        targetServer: Server,
+        workspace: Workspace
+    ) async throws -> UUID? {
+        switch jumpHostMode {
+        case .none:
+            return nil
+        case .existing:
+            return selectedJumpHostServerId
+        case .createNew:
+            guard serverManager.canAddServer || isEditing else {
+                throw VVTermError.proRequired(String(localized: "Upgrade to Pro for unlimited servers"))
+            }
+
+            let jumpHostServerId = UUID()
+            let jumpHostServer = buildJumpHostServer(
+                id: jumpHostServerId,
+                workspaceId: workspace.id,
+                folderId: targetServer.folderId
+            )
+            let jumpHostCredentials = buildJumpHostCredentials(for: jumpHostServerId)
+            try await serverManager.addServer(jumpHostServer, credentials: jumpHostCredentials)
+            return jumpHostServerId
+        }
     }
 
     private func runConnectionTest(force: Bool) async -> Bool {
@@ -1192,12 +1456,25 @@ struct ServerFormSheet: View {
 
         Task {
             do {
-                let (newServer, credentials) = await MainActor.run { () -> (Server, ServerCredentials) in
+                let (draftServer, credentials) = await MainActor.run { () -> (Server, ServerCredentials) in
                     let serverId = server?.id ?? UUID()
                     let server = buildServer(id: serverId, createdAt: server?.createdAt ?? Date())
                     let credentials = buildCredentials(for: serverId)
                     return (server, credentials)
                 }
+
+                let workspaceId = draftServer.workspaceId
+                guard let workspace = serverManager.workspace(withId: workspaceId) else {
+                    throw VVTermError.validation(String(localized: "The selected workspace is no longer available."))
+                }
+
+                let jumpHostServerId = try await resolveJumpHostServerId(
+                    targetServer: draftServer,
+                    workspace: workspace
+                )
+
+                var newServer = draftServer
+                newServer.jumpHostServerId = jumpHostServerId
 
                 if isEditing {
                     try await serverManager.updateServer(newServer)
@@ -1231,6 +1508,16 @@ struct ServerFormSheet: View {
                     }
                 } else {
                     try await serverManager.addServer(newServer, credentials: credentials)
+                }
+
+                if let jumpHostServerId {
+                    try await serverManager.ensureServerAndJumpHostShareFolder(
+                        serverId: newServer.id,
+                        jumpHostServerId: jumpHostServerId
+                    )
+                    if let refreshed = serverManager.server(withId: newServer.id) {
+                        newServer = refreshed
+                    }
                 }
 
                 await MainActor.run {
@@ -1438,7 +1725,7 @@ struct MoveServerSheet: View {
                             .tag(Optional<UUID>.none)
 
                         ForEach(destinationFolders) { folder in
-                            Text(folder.name)
+                            Text(serverManager.folderDisplayName(folder, in: selectedDestination ?? currentWorkspace ?? Workspace(name: "")))
                                 .tag(Optional(folder.id))
                         }
                     }

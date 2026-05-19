@@ -45,6 +45,11 @@ struct ShellHandle {
     }
 }
 
+struct ForwardChannelHandle {
+    let id: UUID
+    let stream: AsyncStream<Data>
+}
+
 enum SSHUploadStrategy: Sendable {
     case automatic
     case execPreferred
@@ -62,10 +67,12 @@ actor SSHClient {
     private var pendingConnectSession: SSHSession?
     private var connectionKey: String?
     private var connectedServer: Server?
+    private var jumpHostClient: SSHClient?
     private var resolvedRemoteEnvironment: RemoteEnvironment?
     private var resolvedRemoteTerminalType: RemoteTerminalType?
     private var moshShells: [UUID: MoshShellRuntime] = [:]
     private let cloudflareTransportManager = CloudflareTransportManager()
+    private let jumpHostTransportManager = JumpHostTransportManager()
     private let moshStartupTimeout: Duration = .seconds(8)
     private let connectTimeout: Duration = .seconds(30)
     private let disconnectTimeout: Duration = .seconds(4)
@@ -93,6 +100,57 @@ actor SSHClient {
     // MARK: - Connection
 
     func connect(to server: Server, credentials: ServerCredentials) async throws -> SSHSession {
+        let helperClient: SSHClient?
+
+        if let jumpHostServerId = server.jumpHostServerId {
+            guard let jumpHost = await MainActor.run(body: {
+                ServerManager.shared.server(withId: jumpHostServerId)
+            }) else {
+                throw SSHError.connectionFailed(String(localized: "Jump host server is missing"))
+            }
+
+            let jumpCredentials = try await MainActor.run(body: {
+                try KeychainManager.shared.getCredentials(for: jumpHost)
+            })
+
+            let candidateClient = jumpHostClient ?? SSHClient()
+            do {
+                _ = try await candidateClient.connect(to: jumpHost, credentials: jumpCredentials)
+            } catch {
+                if candidateClient !== jumpHostClient {
+                    await candidateClient.disconnect()
+                }
+                throw error
+            }
+            helperClient = candidateClient
+        } else {
+            if let jumpHostClient {
+                await jumpHostClient.disconnect()
+                self.jumpHostClient = nil
+            }
+            helperClient = nil
+        }
+
+        do {
+            let session = try await connect(to: server, credentials: credentials, viaJumpTunnelFrom: helperClient)
+            self.jumpHostClient = helperClient
+            return session
+        } catch {
+            if let helperClient {
+                await helperClient.disconnect()
+                if self.jumpHostClient === helperClient {
+                    self.jumpHostClient = nil
+                }
+            }
+            throw error
+        }
+    }
+
+    func connect(
+        to server: Server,
+        credentials: ServerCredentials,
+        viaJumpTunnelFrom jumpClient: SSHClient?
+    ) async throws -> SSHSession {
         _isAborted = false
         try Task.checkCancellation()
 
@@ -119,13 +177,19 @@ actor SSHClient {
         var dialHost = server.host
         var dialPort = server.port
 
-        if server.connectionMode == .cloudflare {
+        if let jumpClient {
+            let localPort = try await jumpHostTransportManager.connect(via: jumpClient, to: server)
+            dialHost = "127.0.0.1"
+            dialPort = Int(localPort)
+            logger.info("Using jump host local tunnel endpoint \(dialHost):\(dialPort)")
+        } else if server.connectionMode == .cloudflare {
             let localPort = try await cloudflareTransportManager.connect(server: server, credentials: credentials)
             dialHost = "127.0.0.1"
             dialPort = Int(localPort)
             logger.info("Using Cloudflare local tunnel endpoint \(dialHost):\(dialPort)")
         } else {
             await disconnectCloudflareTransport(reason: "pre-connect cleanup")
+            await jumpHostTransportManager.disconnect()
         }
 
         let config = SSHSessionConfig(
@@ -174,6 +238,7 @@ actor SSHClient {
                 self._sessionForAbort = nil
                 self.connectedServer = nil
                 await disconnectCloudflareTransport(reason: "connect cancellation")
+                await jumpHostTransportManager.disconnect()
                 throw CancellationError()
             }
             self.session = session
@@ -195,6 +260,7 @@ actor SSHClient {
             self.resolvedRemoteEnvironment = nil
             self.resolvedRemoteTerminalType = nil
             await disconnectCloudflareTransport(reason: "connect failure")
+            await jumpHostTransportManager.disconnect()
             if server.connectionMode == .cloudflare,
                case SSHError.connectionFailed(let message) = error,
                message.contains("SSH handshake failed: -13") {
@@ -234,6 +300,11 @@ actor SSHClient {
         activeSession?.abort()
         await disconnectSSHSession(activeSession)
         await disconnectCloudflareTransport(reason: "client disconnect")
+        await jumpHostTransportManager.disconnect()
+        if let jumpHostClient {
+            await jumpHostClient.disconnect()
+            self.jumpHostClient = nil
+        }
 
         logger.info("Disconnected")
     }
@@ -580,6 +651,25 @@ actor SSHClient {
         }
     }
 
+    func openDirectTCPIPChannel(host: String, port: Int) async throws -> ForwardChannelHandle {
+        guard let session else {
+            throw SSHError.notConnected
+        }
+        return try await session.openDirectTCPIPChannel(host: host, port: port)
+    }
+
+    func closeForwardChannel(_ channelId: UUID) async {
+        guard let session else { return }
+        await session.closeForwardChannel(channelId)
+    }
+
+    func writeForwardData(_ data: Data, to channelId: UUID) async throws {
+        guard let session else {
+            throw SSHError.notConnected
+        }
+        try await session.writeForwardData(data, to: channelId)
+    }
+
     // MARK: - State
 
     var isConnected: Bool {
@@ -895,10 +985,23 @@ actor SSHSession {
         }
     }
 
+    private final class ForwardChannelState {
+        let id: UUID
+        var channel: OpaquePointer
+        let continuation: AsyncStream<Data>.Continuation
+
+        init(id: UUID, channel: OpaquePointer, continuation: AsyncStream<Data>.Continuation) {
+            self.id = id
+            self.channel = channel
+            self.continuation = continuation
+        }
+    }
+
     let config: SSHSessionConfig
     private var libssh2Session: OpaquePointer?
     private var sftpSession: OpaquePointer?
     private var shellChannels: [UUID: ShellChannelState] = [:]
+    private var forwardChannels: [UUID: ForwardChannelState] = [:]
     private var socket: Int32 = -1
     private var isActive = false
     private var ioTask: Task<Void, Never>?
@@ -1229,6 +1332,7 @@ actor SSHSession {
 
         // Finish shell streams first to unblock any waiting consumers
         closeAllShellChannels()
+        closeAllForwardChannels()
 
         // Cancel IO task
         ioTask?.cancel()
@@ -1254,6 +1358,7 @@ actor SSHSession {
 
         closeSFTPSession()
         closeAllShellChannels()
+        closeAllForwardChannels()
         closeAllExecChannels()
 
         if let session = libssh2Session {
@@ -1802,6 +1907,41 @@ actor SSHSession {
 
         return ShellHandle(id: shellId, stream: stream)
     }
+
+    func openDirectTCPIPChannel(host: String, port: Int) async throws -> ForwardChannelHandle {
+        guard let session = libssh2Session else {
+            throw SSHError.notConnected
+        }
+
+        libssh2_session_set_blocking(session, 1)
+        defer { libssh2_session_set_blocking(session, 0) }
+
+        guard let channel = libssh2_channel_direct_tcpip_ex(
+            session,
+            host,
+            Int32(port),
+            "127.0.0.1",
+            0
+        ) else {
+            throw SSHError.channelOpenFailed
+        }
+
+        let channelId = UUID()
+        let stream = AsyncStream<Data> { continuation in
+            let state = ForwardChannelState(id: channelId, channel: channel, continuation: continuation)
+            self.forwardChannels[channelId] = state
+
+            continuation.onTermination = { [weak self] _ in
+                Task { [weak self] in
+                    await self?.closeForwardChannel(channelId)
+                }
+            }
+        }
+
+        startIOLoop()
+        return ForwardChannelHandle(id: channelId, stream: stream)
+    }
+
     private func startIOLoop() {
         guard ioTask == nil else { return }
         ioTask = Task { [weak self] in
@@ -1895,6 +2035,30 @@ actor SSHSession {
                 }
             }
 
+            if !forwardChannels.isEmpty {
+                let states = Array(forwardChannels.values)
+                for state in states {
+                    let bytesRead = libssh2_channel_read_ex(state.channel, 0, &buffer, buffer.count)
+
+                    if bytesRead > 0 {
+                        state.continuation.yield(Data(bytes: buffer, count: Int(bytesRead)))
+                        didWork = true
+                    } else if bytesRead == Int(LIBSSH2_ERROR_EAGAIN) {
+                        // No data ready yet.
+                    } else if bytesRead < 0 {
+                        logger.error("Forward channel read error: \(bytesRead)")
+                        closeForwardChannelInternal(state.id)
+                        didWork = true
+                        continue
+                    }
+
+                    if libssh2_channel_eof(state.channel) != 0 {
+                        closeForwardChannelInternal(state.id)
+                        didWork = true
+                    }
+                }
+            }
+
             if !execRequests.isEmpty {
                 let requestIds = Array(execRequests.keys)
                 for requestId in requestIds {
@@ -1932,7 +2096,7 @@ actor SSHSession {
                 }
             }
 
-            if shellChannels.isEmpty, execRequests.isEmpty {
+            if shellChannels.isEmpty, forwardChannels.isEmpty, execRequests.isEmpty {
                 break
             }
 
@@ -1946,6 +2110,7 @@ actor SSHSession {
         }
 
         closeAllShellChannels()
+        closeAllForwardChannels()
         stopIOLoop()
     }
 
@@ -1970,6 +2135,27 @@ actor SSHSession {
             if !state.batchBuffer.isEmpty {
                 state.continuation.yield(state.batchBuffer)
             }
+            libssh2_channel_close(state.channel)
+            libssh2_channel_free(state.channel)
+            state.continuation.finish()
+        }
+    }
+
+    func closeForwardChannel(_ channelId: UUID) async {
+        closeForwardChannelInternal(channelId)
+    }
+
+    private func closeForwardChannelInternal(_ channelId: UUID) {
+        guard let state = forwardChannels.removeValue(forKey: channelId) else { return }
+        libssh2_channel_close(state.channel)
+        libssh2_channel_free(state.channel)
+        state.continuation.finish()
+    }
+
+    private func closeAllForwardChannels() {
+        let states = forwardChannels
+        forwardChannels.removeAll()
+        for state in states.values {
             libssh2_channel_close(state.channel)
             libssh2_channel_free(state.channel)
             state.continuation.finish()
@@ -2160,6 +2346,39 @@ actor SSHSession {
                 await waitForSocket()
             } else {
                 throw SSHError.socketError("Write failed: \(written)")
+            }
+        }
+    }
+
+    func writeForwardData(_ data: Data, to channelId: UUID) async throws {
+        guard let state = forwardChannels[channelId] else {
+            throw SSHError.notConnected
+        }
+
+        var bytes = [UInt8](data)
+        var remaining = bytes.count
+        var offset = 0
+
+        while remaining > 0 {
+            let written = bytes.withUnsafeMutableBufferPointer { buffer -> Int in
+                guard let ptr = buffer.baseAddress else { return -1 }
+                return Int(
+                    libssh2_channel_write_ex(
+                        state.channel,
+                        0,
+                        UnsafeRawPointer(ptr.advanced(by: offset)).assumingMemoryBound(to: CChar.self),
+                        remaining
+                    )
+                )
+            }
+
+            if written > 0 {
+                offset += written
+                remaining -= written
+            } else if written == Int(LIBSSH2_ERROR_EAGAIN) {
+                await waitForSocket()
+            } else {
+                throw SSHError.socketError("Forward write failed: \(written)")
             }
         }
     }
@@ -2832,7 +3051,8 @@ enum SSHError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notConnected: return "Not connected to server"
-        case .connectionFailed(let msg): return "Connection failed: \(msg)"
+        case .connectionFailed(let msg):
+            return String(format: String(localized: "Connection failed: %@"), msg)
         case .authenticationFailed: return "Authentication failed"
         case .tailscaleAuthenticationNotAccepted:
             return "\(String(localized: "Tailscale SSH authentication was not accepted by the server.")) \(String(localized: "This app currently supports direct tailnet connections only (no userspace proxy fallback)."))"

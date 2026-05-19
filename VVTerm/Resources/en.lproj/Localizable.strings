@@ -267,6 +267,7 @@
 "Add Folder" = "Add Folder";
 "Add Server to Folder" = "Add Server to Folder";
 "Edit Folder" = "Edit Folder";
+"New Subfolder" = "New Subfolder";
 "New Folder" = "New Folder";
 "Delete Folder" = "Delete Folder";
 "Delete Folder?" = "Delete Folder?";
@@ -616,12 +617,18 @@
 "Upgrade to Pro for custom environments" = "Upgrade to Pro for custom environments";
 
 /* Misc */
+"Delete Server" = "Delete Server";
+"Delete Server?" = "Delete Server?";
 "Terminal initialization failed" = "Terminal initialization failed";
 "Voice Input Unavailable" = "Voice Input Unavailable";
 "Disconnect from server" = "Disconnect from server";
 "Disconnect from %@?" = "Disconnect from %@?";
 "This will return to the server list." = "This will return to the server list.";
 "All terminal tabs for this server will be closed." = "All terminal tabs for this server will be closed.";
+"This will delete the server. This cannot be undone." = "This will delete the server. This cannot be undone.";
+"This server is currently used as a jump host by %@." = "This server is currently used as a jump host by %@.";
+"This server is currently used as a jump host by %@ and %lld more." = "This server is currently used as a jump host by %@ and %lld more.";
+"Deleting it will remove the jump host setting from the affected servers." = "Deleting it will remove the jump host setting from the affected servers.";
 "Add Terminal Preset" = "Add Terminal Preset";
 "Edit Preset" = "Edit Preset";
 "Basic Information" = "Basic Information";
@@ -760,10 +767,27 @@
 /* Server Form Placeholders */
 "My Server" = "My Server";
 "203.0.113.10" = "203.0.113.10";
+"203.0.113.20" = "203.0.113.20";
 "22" = "22";
 "root" = "root";
 "Required" = "Required";
 "Optional" = "Optional";
+"Use Existing Server" = "Use Existing Server";
+"Create New Jump Host" = "Create New Jump Host";
+"Jump Host" = "Jump Host";
+"Select a server..." = "Select a server...";
+"Jump Host Name" = "Jump Host Name";
+"Bastion" = "Bastion";
+"Jump Host Host" = "Jump Host Host";
+"Jump Host Username" = "Jump Host Username";
+"Jump Host Password" = "Jump Host Password";
+"Jump Host Key Passphrase" = "Jump Host Key Passphrase";
+"Route this server through a bastion host in the same workspace." = "Route this server through a bastion host in the same workspace.";
+"Jump host uses server-side Tailscale SSH policy." = "Jump host uses server-side Tailscale SSH policy.";
+"Jump host listener cancelled" = "Jump host listener cancelled";
+"Jump host server is missing" = "Jump host server is missing";
+"Server Group" = "Server Group";
+"%@ Group" = "%@ Group";
 "Tailscale SSH" = "Tailscale SSH";
 "Uses server-side Tailscale SSH policy. No password or SSH key is required." = "Uses server-side Tailscale SSH policy. No password or SSH key is required.";
 "Tailscale SSH authentication was not accepted by the server." = "Tailscale SSH authentication was not accepted by the server.";

@@ -35,7 +35,14 @@ enum SSHConnectionRunner {
 
             do {
                 logger.info("Connecting to \(server.host)... (attempt \(attempt))")
-                _ = try await sshClient.connect(to: server, credentials: credentials)
+                _ = try await SSHConnectionOperationService.shared.runWithConnection(
+                    using: sshClient,
+                    server: server,
+                    credentials: credentials,
+                    disconnectWhenDone: false
+                ) { _ in
+                    ()
+                }
                 guard !Task.isCancelled else { return }
 
                 let size = terminal.terminalSize()

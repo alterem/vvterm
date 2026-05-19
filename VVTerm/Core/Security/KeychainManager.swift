@@ -123,6 +123,19 @@ final class KeychainManager {
         return credentials
     }
 
+    func getCredentials(for serverId: UUID, authMethod: AuthMethod, connectionMode: SSHConnectionMode) throws -> ServerCredentials {
+        let server = Server(
+            id: serverId,
+            workspaceId: UUID(),
+            name: "",
+            host: "",
+            username: "",
+            connectionMode: connectionMode,
+            authMethod: authMethod
+        )
+        return try getCredentials(for: server)
+    }
+
     // MARK: - Cloudflare Service Token
 
     func storeCloudflareServiceToken(for serverId: UUID, clientID: String, clientSecret: String) throws {
