@@ -139,6 +139,7 @@ struct ServerFormSheet: View {
     @State private var cloudflareTeamDomainOverride: String = ""
     @State private var showCloudflareOverrides: Bool = false
     @State private var selectedWorkspaceId: UUID?
+    @State private var selectedFolderId: UUID?
     @State private var selectedEnvironment: ServerEnvironment = .production
     @State private var notes: String = ""
     @State private var requiresBiometricUnlock: Bool = false
@@ -175,8 +176,9 @@ struct ServerFormSheet: View {
         self.prefill = prefill
         self.onSave = onSave
 
-        let initialWorkspaceId = server?.workspaceId ?? workspace?.id
+        let initialWorkspaceId = server?.workspaceId ?? prefill?.preferredWorkspaceId ?? workspace?.id
         _selectedWorkspaceId = State(initialValue: initialWorkspaceId)
+        _selectedFolderId = State(initialValue: server?.folderId ?? prefill?.preferredFolderId)
 
         if let server = server {
             _name = State(initialValue: server.name)
@@ -249,6 +251,15 @@ struct ServerFormSheet: View {
             selectedWorkspace.name,
             resolvedEnvironment.displayName
         )
+    }
+
+    private var availableFolders: [WorkspaceServerFolder] {
+        selectedWorkspace?.folders.sorted { lhs, rhs in
+            if lhs.order != rhs.order {
+                return lhs.order < rhs.order
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        } ?? []
     }
 
     private var workspaceAvailabilityHelpText: String? {
@@ -462,6 +473,9 @@ struct ServerFormSheet: View {
                 reconcileAssignmentWorkspace()
                 resetConnectionTestState()
             }
+            .onChange(of: selectedFolderId) { _ in
+                resetConnectionTestState()
+            }
             .onChange(of: password) { _ in resetConnectionTestState() }
             .onChange(of: sshKey) { _ in
                 if let programmaticSSHKeyValue,
@@ -565,6 +579,16 @@ struct ServerFormSheet: View {
                         Text(env.displayName)
                     }
                     .tag(env)
+                }
+            }
+
+            Picker("Folder", selection: $selectedFolderId) {
+                Text("No Folder")
+                    .tag(Optional<UUID>.none)
+
+                ForEach(availableFolders) { folder in
+                    Text(folder.name)
+                        .tag(Optional(folder.id))
                 }
             }
 
@@ -992,6 +1016,7 @@ struct ServerFormSheet: View {
         return Server(
             id: id,
             workspaceId: selectedWorkspace?.id ?? assignmentWorkspaces.first?.id ?? serverManager.workspaces.first?.id ?? UUID(),
+            folderId: selectedFolderId,
             environment: selectedEnvironment,
             name: name,
             host: host,
@@ -1078,6 +1103,11 @@ struct ServerFormSheet: View {
         }
 
         guard let selectedWorkspace else { return }
+
+        if let selectedFolderId,
+           selectedWorkspace.folder(withId: selectedFolderId) == nil {
+            self.selectedFolderId = nil
+        }
 
         selectedEnvironment = ServerMoveSupport.resolveEnvironment(
             currentEnvironment: server?.environment ?? selectedEnvironment,
@@ -1237,6 +1267,7 @@ struct MoveServerSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedWorkspaceId: UUID?
+    @State private var selectedFolderId: UUID?
     @State private var selectedEnvironment: ServerEnvironment
     @State private var isMoving = false
     @State private var error: String?
@@ -1254,6 +1285,7 @@ struct MoveServerSheet: View {
         self.preferredDestination = preferredDestination
         self.onMove = onMove
         _selectedWorkspaceId = State(initialValue: preferredDestination?.id)
+        _selectedFolderId = State(initialValue: server.folderId)
         _selectedEnvironment = State(initialValue: server.environment)
     }
 
@@ -1286,6 +1318,15 @@ struct MoveServerSheet: View {
 
     private var moveButtonDisabled: Bool {
         isMoving || selectedDestination == nil
+    }
+
+    private var destinationFolders: [WorkspaceServerFolder] {
+        selectedDestination?.folders.sorted { lhs, rhs in
+            if lhs.order != rhs.order {
+                return lhs.order < rhs.order
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        } ?? []
     }
 
     private var destinationAvailabilityNotice: String {
@@ -1392,6 +1433,16 @@ struct MoveServerSheet: View {
                         }
                     }
 
+                    Picker("Folder", selection: $selectedFolderId) {
+                        Text("No Folder")
+                            .tag(Optional<UUID>.none)
+
+                        ForEach(destinationFolders) { folder in
+                            Text(folder.name)
+                                .tag(Optional(folder.id))
+                        }
+                    }
+
                     if let environmentNotice {
                         Text(environmentNotice)
                             .font(.caption)
@@ -1420,6 +1471,13 @@ struct MoveServerSheet: View {
         }
         .onChange(of: selectedWorkspaceId) { _ in
             reconcileSelection()
+        }
+        .onChange(of: selectedFolderId) { _ in
+            if let selectedDestination,
+               let selectedFolderId,
+               selectedDestination.folder(withId: selectedFolderId) == nil {
+                self.selectedFolderId = nil
+            }
         }
         .sheet(isPresented: $showingCreateWorkspace) {
             WorkspaceFormSheet(
@@ -1498,6 +1556,11 @@ struct MoveServerSheet: View {
 
         guard let selectedDestination else { return }
 
+        if let selectedFolderId,
+           selectedDestination.folder(withId: selectedFolderId) == nil {
+            self.selectedFolderId = nil
+        }
+
         selectedEnvironment = serverManager.resolvedEnvironment(
             for: server,
             destination: selectedDestination,
@@ -1516,7 +1579,8 @@ struct MoveServerSheet: View {
                 let updatedServer = try await serverManager.moveServer(
                     server,
                     to: destination,
-                    preferredEnvironment: selectedEnvironment
+                    preferredEnvironment: selectedEnvironment,
+                    folderId: selectedFolderId
                 )
 
                 await MainActor.run {

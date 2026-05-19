@@ -41,6 +41,18 @@ extension Workspace {
         } else {
             self.environments = ServerEnvironment.builtInEnvironments
         }
+
+        if let folderData = record["folders"] as? Data,
+           let folders = try? JSONDecoder().decode([WorkspaceServerFolder].self, from: folderData) {
+            self.folders = folders.sorted { lhs, rhs in
+                if lhs.order != rhs.order {
+                    return lhs.order < rhs.order
+                }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+        } else {
+            self.folders = []
+        }
     }
 
     func toRecord(in zoneID: CKRecordZone.ID? = nil) -> CKRecord {
@@ -58,6 +70,10 @@ extension Workspace {
 
         if let envData = try? JSONEncoder().encode(environments) {
             record["environments"] = envData
+        }
+
+        if let folderData = try? JSONEncoder().encode(folders) {
+            record["folders"] = folderData
         }
 
         return record

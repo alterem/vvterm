@@ -162,6 +162,7 @@ struct WorkspaceFormSheet: View {
                     icon: workspace?.icon,
                     order: workspace?.order ?? serverManager.workspaces.count,
                     environments: workspace?.environments ?? ServerEnvironment.builtInEnvironments,
+                    folders: workspace?.folders ?? [],
                     lastSelectedEnvironmentId: workspace?.lastSelectedEnvironmentId,
                     lastSelectedServerId: workspace?.lastSelectedServerId,
                     createdAt: workspace?.createdAt ?? Date()

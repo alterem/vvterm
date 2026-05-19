@@ -59,17 +59,23 @@ struct ServerFormPrefill: Equatable, Sendable {
     var host: String
     var port: Int
     var username: String?
+    var preferredWorkspaceId: UUID?
+    var preferredFolderId: UUID?
 
     init(
         name: String,
         host: String,
         port: Int = 22,
-        username: String? = nil
+        username: String? = nil,
+        preferredWorkspaceId: UUID? = nil,
+        preferredFolderId: UUID? = nil
     ) {
         self.name = name
         self.host = host
         self.port = port
         self.username = username
+        self.preferredWorkspaceId = preferredWorkspaceId
+        self.preferredFolderId = preferredFolderId
     }
 
     init(discoveredHost: DiscoveredSSHHost) {
@@ -77,5 +83,7 @@ struct ServerFormPrefill: Equatable, Sendable {
         self.host = discoveredHost.host
         self.port = discoveredHost.port
         self.username = nil
+        self.preferredWorkspaceId = nil
+        self.preferredFolderId = nil
     }
 }

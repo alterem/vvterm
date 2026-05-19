@@ -161,6 +161,8 @@ struct iOSServerListView: View {
     @State private var showingCreateEnvironment = false
     @State private var editingEnvironment: ServerEnvironment?
     @State private var environmentToDelete: ServerEnvironment?
+    @State private var editingFolder: WorkspaceServerFolder?
+    @State private var creatingFolderInWorkspace: Workspace?
     @State private var searchText = ""
     @State private var serverToEdit: Server?
     @State private var serverToMove: Server?
@@ -188,7 +190,7 @@ struct iOSServerListView: View {
         }
         .id(listRefreshIdentity)
         .overlay(alignment: .center) {
-            if filteredServers.isEmpty {
+            if filteredServers.isEmpty && filteredFolderGroups.isEmpty {
                 NoServersEmptyState(
                     onAddServer: { presentAddServer() },
                     onAddWorkspace: { showingAddWorkspace = true },
@@ -207,8 +209,20 @@ struct iOSServerListView: View {
             }
 
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    presentAddServer()
+                Menu {
+                    Button {
+                        presentAddServer()
+                    } label: {
+                        Label("Add Server", systemImage: "plus")
+                    }
+
+                    if let selectedWorkspace {
+                        Button {
+                            creatingFolderInWorkspace = selectedWorkspace
+                        } label: {
+                            Label(String(localized: "Add Folder"), systemImage: "folder.badge.plus")
+                        }
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -256,6 +270,15 @@ struct iOSServerListView: View {
             SettingsView()
                 .modifier(AppearanceModifier())
         }
+        .sheet(item: $creatingFolderInWorkspace) { workspace in
+            WorkspaceFolderFormSheet(
+                serverManager: serverManager,
+                workspace: workspace,
+                onSave: { updatedWorkspace in
+                    selectedWorkspace = updatedWorkspace
+                }
+            )
+        }
         .sheet(isPresented: $showingWorkspacePicker) {
             NavigationStack {
                 iOSWorkspacePickerView(
@@ -286,6 +309,18 @@ struct iOSServerListView: View {
                     onMove: { updatedServer in
                         handleSavedServer(updatedServer, originalServer: server)
                         serverToMove = nil
+                    }
+                )
+            }
+        }
+        .sheet(item: $editingFolder) { folder in
+            if let workspace = selectedWorkspace {
+                WorkspaceFolderFormSheet(
+                    serverManager: serverManager,
+                    workspace: workspace,
+                    folder: folder,
+                    onSave: { updatedWorkspace in
+                        selectedWorkspace = updatedWorkspace
                     }
                 )
             }
@@ -409,7 +444,7 @@ struct iOSServerListView: View {
     }
 
     private var filteredServerCountText: String {
-        let serverCount = filteredServers.count
+        let serverCount = filteredServers.count + filteredFolderGroups.reduce(0) { $0 + $1.servers.count }
         if serverCount == 1 {
             return String(format: String(localized: "%lld server"), Int64(serverCount))
         }
@@ -446,7 +481,7 @@ struct iOSServerListView: View {
     @ViewBuilder
     private var serversSection: some View {
         Section {
-            if filteredServers.isEmpty {
+            if filteredServers.isEmpty && filteredFolderGroups.isEmpty {
                 Color.clear
                     .frame(height: 1)
                     .listRowBackground(Color.clear)
@@ -460,6 +495,43 @@ struct iOSServerListView: View {
                         onMove: { serverToMove = server },
                         onLockedTap: { lockedServerAlert = server }
                     )
+                }
+
+                ForEach(filteredFolderGroups, id: \.folder.id) { group in
+                    DisclosureGroup {
+                        ForEach(group.servers) { server in
+                            iOSServerRow(
+                                server: server,
+                                onTap: { onServerSelected(server) },
+                                onEdit: { serverToEdit = server },
+                                onMove: { serverToMove = server },
+                                onLockedTap: { lockedServerAlert = server }
+                            )
+                        }
+                    } label: {
+                        HStack {
+                            Label(group.folder.name, systemImage: "folder")
+                                .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Text(group.servers.count, format: .number)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .contextMenu {
+                        Button {
+                            editingFolder = group.folder
+                        } label: {
+                            Label(String(localized: "Edit Folder"), systemImage: "pencil")
+                        }
+
+                        Button(role: .destructive) {
+                            deleteFolder(group.folder)
+                        } label: {
+                            Label(String(localized: "Delete Folder"), systemImage: "trash")
+                        }
+                    }
                 }
             }
         } header: {
@@ -502,7 +574,7 @@ struct iOSServerListView: View {
 
     @ViewBuilder
     private var activeConnectionsSection: some View {
-        if !activeConnections.isEmpty && !filteredServers.isEmpty {
+        if !activeConnections.isEmpty && (!filteredServers.isEmpty || !filteredFolderGroups.isEmpty) {
             Section {
                 ForEach(activeConnections) { connection in
                     iOSActiveConnectionRow(
@@ -555,7 +627,7 @@ struct iOSServerListView: View {
             }
         }
 
-        var servers = serverManager.servers(in: workspace, environment: selectedEnvironment)
+        var servers = serverManager.topLevelServers(in: workspace, environment: selectedEnvironment)
 
         if !searchText.isEmpty {
             let lowercased = searchText.lowercased()
@@ -568,12 +640,28 @@ struct iOSServerListView: View {
         return servers.sorted { $0.name < $1.name }
     }
 
+    private var filteredFolderGroups: [(folder: WorkspaceServerFolder, servers: [Server])] {
+        guard let workspace = selectedWorkspace else { return [] }
+
+        return serverManager.folderedServers(in: workspace, environment: selectedEnvironment)
+            .map { group in
+                let servers = searchText.isEmpty ? group.servers : group.servers.filter {
+                    let lowercased = searchText.lowercased()
+                    return $0.name.lowercased().contains(lowercased) ||
+                        $0.host.lowercased().contains(lowercased)
+                }
+                return (group.folder, servers)
+            }
+            .filter { searchText.isEmpty || !$0.servers.isEmpty }
+    }
+
     private var listRefreshIdentity: String {
         let workspaceID = selectedWorkspace?.id.uuidString ?? "all-workspaces"
         let environmentID = selectedEnvironment?.id.uuidString ?? "all-environments"
         let serverIDs = filteredServers.map { $0.id.uuidString }.joined(separator: ",")
+        let folderIDs = filteredFolderGroups.map { "\($0.folder.id.uuidString):\($0.servers.map(\.id.uuidString).joined(separator: ","))" }.joined(separator: "|")
         let activeConnectionIDs = activeConnections.map { $0.id.uuidString }.joined(separator: ",")
-        return [workspaceID, environmentID, serverIDs, activeConnectionIDs].joined(separator: "|")
+        return [workspaceID, environmentID, serverIDs, folderIDs, activeConnectionIDs].joined(separator: "|")
     }
 
     private var serverCountsByEnvironment: [UUID: Int] {
@@ -624,6 +712,18 @@ struct iOSServerListView: View {
 
     private func server(for serverId: UUID) -> Server? {
         serverManager.servers.first { $0.id == serverId }
+    }
+
+    private func deleteFolder(_ folder: WorkspaceServerFolder) {
+        Task {
+            guard let workspace = selectedWorkspace else { return }
+            let updatedWorkspace = try? await serverManager.deleteFolder(folder, in: workspace)
+            await MainActor.run {
+                if let updatedWorkspace {
+                    selectedWorkspace = updatedWorkspace
+                }
+            }
+        }
     }
 }
 

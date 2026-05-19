@@ -5,6 +5,7 @@ import Foundation
 struct Server: Identifiable, Codable, Hashable {
     let id: UUID
     var workspaceId: UUID
+    var folderId: UUID?
     var environment: ServerEnvironment
     var name: String
     var host: String
@@ -30,6 +31,7 @@ struct Server: Identifiable, Codable, Hashable {
     init(
         id: UUID = UUID(),
         workspaceId: UUID,
+        folderId: UUID? = nil,
         environment: ServerEnvironment = .production,
         name: String,
         host: String,
@@ -52,6 +54,7 @@ struct Server: Identifiable, Codable, Hashable {
     ) {
         self.id = id
         self.workspaceId = workspaceId
+        self.folderId = folderId
         self.environment = environment
         self.name = name
         self.host = host
@@ -83,6 +86,7 @@ struct Server: Identifiable, Codable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case id
         case workspaceId
+        case folderId
         case environment
         case name
         case host
@@ -108,6 +112,7 @@ struct Server: Identifiable, Codable, Hashable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         workspaceId = try container.decode(UUID.self, forKey: .workspaceId)
+        folderId = try container.decodeIfPresent(UUID.self, forKey: .folderId)
         environment = try container.decodeIfPresent(ServerEnvironment.self, forKey: .environment) ?? .production
         name = try container.decode(String.self, forKey: .name)
         host = try container.decode(String.self, forKey: .host)
@@ -141,6 +146,7 @@ struct Server: Identifiable, Codable, Hashable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(workspaceId, forKey: .workspaceId)
+        try container.encodeIfPresent(folderId, forKey: .folderId)
         try container.encode(environment, forKey: .environment)
         try container.encode(name, forKey: .name)
         try container.encode(host, forKey: .host)

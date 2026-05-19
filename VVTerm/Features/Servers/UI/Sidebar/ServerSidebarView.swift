@@ -25,6 +25,12 @@ struct ServerSidebarView: View {
     @State private var serverToEdit: Server?
     @State private var serverToMove: Server?
     @State private var lockedServerAlert: Server?
+    @State private var editingFolder: WorkspaceServerFolder?
+    @State private var isCreatingFolderInline = false
+    @State private var newFolderName = ""
+    @State private var createFolderError: String?
+    @FocusState private var isNewFolderFieldFocused: Bool
+    @State private var expandedFolderIDs: Set<UUID> = []
     @State private var addServerPrefill: ServerFormPrefill?
     @State private var queuedDiscoveryPrefill: ServerFormPrefill?
 
@@ -110,6 +116,27 @@ struct ServerSidebarView: View {
         return servers.sorted { $0.name < $1.name }
     }
 
+    private var topLevelFilteredServers: [Server] {
+        guard let workspace = selectedWorkspace else { return [] }
+        return serverManager.topLevelServers(in: workspace, environment: nil)
+            .filter(matchesFilters)
+    }
+
+    private var filteredFolderGroups: [(folder: WorkspaceServerFolder, servers: [Server])] {
+        guard let workspace = selectedWorkspace else { return [] }
+        return serverManager.folderedServers(in: workspace, environment: nil)
+            .map { ($0.folder, $0.servers.filter(matchesFilters)) }
+            .filter { searchText.isEmpty || !$0.servers.isEmpty }
+    }
+
+    private var hasFilteredServers: Bool {
+        !topLevelFilteredServers.isEmpty || !filteredFolderGroups.isEmpty
+    }
+
+    private var shouldShowInlineFolderComposer: Bool {
+        isCreatingFolderInline && selectedWorkspace != nil
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -153,27 +180,42 @@ struct ServerSidebarView: View {
             }
 
             // Server list
-            if filteredServers.isEmpty {
+            if !hasFilteredServers {
                 emptyState
             } else {
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        ForEach(filteredServers) { server in
-                            ServerRow(
-                                server: server,
-                                isSelected: selectedServer?.id == server.id,
-                                onSelect: { selectServer(server) },
-                                onEdit: { serverToEdit = $0 },
-                                onMove: { serverToMove = $0 },
-                                onConnect: { connectToServer($0) },
-                                onLockedTap: { lockedServerAlert = server }
-                            )
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        ForEach(topLevelFilteredServers) { server in
+                            serverRow(for: server)
+                        }
+
+                        if shouldShowInlineFolderComposer {
+                            inlineFolderComposer
+                        }
+
+                        ForEach(filteredFolderGroups, id: \.folder.id) { group in
+                            folderGroupView(folder: group.folder, servers: group.servers)
                         }
                     }
                     .padding(.horizontal, 12)
                     .padding(.top, 4)
                     .padding(.bottom, 2)
+                }
+                .contentShape(Rectangle())
+                .contextMenu {
+                    Button {
+                        presentAddServer()
+                    } label: {
+                        Label("Add Server", systemImage: "plus")
+                    }
+
+                    if let selectedWorkspace {
+                        Button {
+                            beginInlineFolderCreation()
+                        } label: {
+                            Label("New Folder", systemImage: "folder.badge.plus")
+                        }
+                    }
                 }
             }
 
@@ -256,6 +298,19 @@ struct ServerSidebarView: View {
             )
             #endif
         }
+        .sheet(item: $editingFolder) { folder in
+            if let workspace = selectedWorkspace {
+                WorkspaceFolderFormSheet(
+                    serverManager: serverManager,
+                    workspace: workspace,
+                    folder: folder,
+                    onSave: { updatedWorkspace in
+                        selectedWorkspace = updatedWorkspace
+                    }
+                )
+                .frame(minWidth: 420, idealWidth: 460, maxWidth: 520, minHeight: 260, idealHeight: 320, maxHeight: 380)
+            }
+        }
         .proUpgradePresentation(isPresented: $showingProUpgrade)
         .sheet(isPresented: $showingCreateEnvironment) {
             if let workspace = selectedWorkspace {
@@ -332,6 +387,15 @@ struct ServerSidebarView: View {
         .onChange(of: showingAddServer) { isPresented in
             if !isPresented {
                 addServerPrefill = nil
+            }
+        }
+        .onChange(of: selectedWorkspace?.id) { _ in
+            cancelInlineFolderCreation()
+        }
+        .onChange(of: isCreatingFolderInline) { isCreating in
+            guard isCreating else { return }
+            DispatchQueue.main.async {
+                isNewFolderFieldFocused = true
             }
         }
         #if os(macOS)
@@ -618,6 +682,137 @@ struct ServerSidebarView: View {
         }
     }
 
+    @ViewBuilder
+    private func serverRow(for server: Server) -> some View {
+        ServerRow(
+            server: server,
+            isSelected: selectedServer?.id == server.id,
+            onSelect: { selectServer(server) },
+            onEdit: { serverToEdit = $0 },
+            onMove: { serverToMove = $0 },
+            onConnect: { connectToServer($0) },
+            onLockedTap: { lockedServerAlert = server }
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func folderGroupView(folder: WorkspaceServerFolder, servers: [Server]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Button {
+                    toggleFolder(folder.id)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: expandedFolderIDs.contains(folder.id) ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 10)
+
+                        Image(systemName: "folder")
+                            .foregroundStyle(.secondary)
+
+                        Text(folder.name)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.secondary)
+
+                        PillBadge(text: "\(servers.count)", color: .secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 8)
+
+                Menu {
+                    Button {
+                        presentAddServer(in: folder)
+                    } label: {
+                        Label("Add Server to Folder", systemImage: "plus")
+                    }
+
+                    Button {
+                        editingFolder = folder
+                    } label: {
+                        Label("Edit Folder", systemImage: "pencil")
+                    }
+
+                    Button(role: .destructive) {
+                        deleteFolder(folder)
+                    } label: {
+                        Label("Delete Folder", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 6)
+
+            if expandedFolderIDs.contains(folder.id) {
+                VStack(spacing: 4) {
+                    ForEach(servers) { server in
+                        serverRow(for: server)
+                            .padding(.leading, 16)
+                    }
+
+                    if servers.isEmpty {
+                        Text("No servers in this folder.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 24)
+                            .padding(.vertical, 6)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var inlineFolderComposer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "folder.badge.plus")
+                    .foregroundStyle(.secondary)
+
+                TextField("Folder name", text: $newFolderName)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isNewFolderFieldFocused)
+                    .onSubmit {
+                        submitInlineFolderCreation()
+                    }
+
+                Button("Create") {
+                    submitInlineFolderCreation()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(newFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Button("Cancel") {
+                    cancelInlineFolderCreation()
+                }
+                .buttonStyle(.borderless)
+            }
+
+            if let createFolderError {
+                Text(createFolderError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(inlineSearchStroke, lineWidth: 0.8)
+                .allowsHitTesting(false)
+        }
+    }
+
     // MARK: - Empty States
 
     private func selectServer(_ server: Server) {
@@ -694,18 +889,35 @@ struct ServerSidebarView: View {
                 }
                 .buttonStyle(.bordered)
             } else {
-                Image(systemName: "server.rack")
+                Image(systemName: "folder")
                     .font(.system(size: 32))
                     .foregroundStyle(.tertiary)
-                Text("No servers in this workspace.")
+                Text("This workspace is empty.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Button {
-                    presentAddServer()
-                } label: {
-                    Text("Add Server")
+
+                HStack(spacing: 10) {
+                    Button {
+                        presentAddServer()
+                    } label: {
+                        Text("Add Server")
+                    }
+                    .buttonStyle(.bordered)
+
+                    if let selectedWorkspace {
+                        Button {
+                            beginInlineFolderCreation()
+                        } label: {
+                            Text("New Folder")
+                        }
+                        .buttonStyle(.bordered)
+                    }
                 }
-                .buttonStyle(.bordered)
+
+                if shouldShowInlineFolderComposer {
+                    inlineFolderComposer
+                        .padding(.horizontal, 12)
+                }
 
                 Button {
                     showingLocalDiscovery = true
@@ -786,6 +998,19 @@ struct ServerSidebarView: View {
         showingAddServer = true
     }
 
+    private func presentAddServer(in folder: WorkspaceServerFolder) {
+        guard let workspace = selectedWorkspace else { return }
+        addServerPrefill = ServerFormPrefill(
+            name: "",
+            host: "",
+            port: 22,
+            username: nil,
+            preferredWorkspaceId: workspace.id,
+            preferredFolderId: folder.id
+        )
+        showingAddServer = true
+    }
+
     private func dismissWorkspacePickerForPendingPrefilledAddServerIfNeeded() {
         guard addServerPrefill != nil, canAddServer else { return }
         showingWorkspaceSwitcher = false
@@ -794,5 +1019,78 @@ struct ServerSidebarView: View {
     private func resumePendingPrefilledAddServerIfNeeded() {
         guard addServerPrefill != nil, canAddServer, !showingAddServer else { return }
         showingAddServer = true
+    }
+
+    private func matchesFilters(_ server: Server) -> Bool {
+        if isEnvironmentFiltering && !selectedEnvironmentIds.contains(server.environment.id) {
+            return false
+        }
+
+        if !searchText.isEmpty {
+            let lowercased = searchText.lowercased()
+            return server.name.lowercased().contains(lowercased) ||
+                server.host.lowercased().contains(lowercased)
+        }
+
+        return true
+    }
+
+    private func toggleFolder(_ folderID: UUID) {
+        if expandedFolderIDs.contains(folderID) {
+            expandedFolderIDs.remove(folderID)
+        } else {
+            expandedFolderIDs.insert(folderID)
+        }
+    }
+
+    private func beginInlineFolderCreation() {
+        guard selectedWorkspace != nil else { return }
+        createFolderError = nil
+        newFolderName = ""
+        isCreatingFolderInline = true
+    }
+
+    private func cancelInlineFolderCreation() {
+        isCreatingFolderInline = false
+        newFolderName = ""
+        createFolderError = nil
+        isNewFolderFieldFocused = false
+    }
+
+    private func submitInlineFolderCreation() {
+        guard let workspace = selectedWorkspace else { return }
+
+        let proposedName = newFolderName
+        createFolderError = nil
+
+        Task {
+            do {
+                let createdFolder = try await serverManager.createFolder(name: proposedName, in: workspace)
+                let updatedWorkspace = serverManager.workspace(withId: workspace.id) ?? workspace
+                await MainActor.run {
+                    selectedWorkspace = updatedWorkspace
+                    expandedFolderIDs.insert(createdFolder.id)
+                    cancelInlineFolderCreation()
+                }
+            } catch {
+                await MainActor.run {
+                    createFolderError = error.localizedDescription
+                    isNewFolderFieldFocused = true
+                }
+            }
+        }
+    }
+
+    private func deleteFolder(_ folder: WorkspaceServerFolder) {
+        Task {
+            guard let workspace = selectedWorkspace else { return }
+            let updatedWorkspace = try? await serverManager.deleteFolder(folder, in: workspace)
+            await MainActor.run {
+                if let updatedWorkspace {
+                    selectedWorkspace = updatedWorkspace
+                }
+                expandedFolderIDs.remove(folder.id)
+            }
+        }
     }
 }

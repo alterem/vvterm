@@ -20,6 +20,13 @@ extension Server {
             return nil
         }
 
+        let folderId: UUID?
+        if let folderIdString = record["folderId"] as? String {
+            folderId = UUID(uuidString: folderIdString)
+        } else {
+            folderId = nil
+        }
+
         guard let name = record["name"] as? String else {
             logger.error("Server \(id): missing name")
             return nil
@@ -69,6 +76,7 @@ extension Server {
 
         self.id = id
         self.workspaceId = workspaceId
+        self.folderId = folderId
         self.name = name
         self.host = host
         self.port = port
@@ -106,6 +114,7 @@ extension Server {
         let record = CKRecord(recordType: "Server", recordID: recordID)
 
         record["workspaceId"] = workspaceId.uuidString
+        record["folderId"] = folderId?.uuidString
         record["name"] = name
         record["host"] = host
         record["port"] = port

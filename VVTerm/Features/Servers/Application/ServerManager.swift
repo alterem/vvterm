@@ -58,6 +58,18 @@ final class ServerManager: ObservableObject {
             logger.info("Loaded \(decoded.count) workspaces from local storage")
         }
 
+        let hadInvalidFolderReferences = servers.contains { server in
+            guard let folderId = server.folderId,
+                  let workspace = workspaces.first(where: { $0.id == server.workspaceId }) else {
+                return false
+            }
+            return workspace.folder(withId: folderId) == nil
+        }
+        if hadInvalidFolderReferences {
+            servers = servers.map(normalizedServer)
+            shouldPersist = true
+        }
+
         shouldPersist = reconcilePendingBootstrapWorkspaceState() || shouldPersist
 
         if Self.shouldCreateBootstrapWorkspace(
@@ -87,6 +99,7 @@ final class ServerManager: ObservableObject {
     func applyWebDAVSnapshot(servers remoteServers: [Server], workspaces remoteWorkspaces: [Workspace]) async {
         workspaces = dedupedWorkspaces(from: remoteWorkspaces)
         servers = dedupedServers(from: remoteServers)
+        await repairOrphanedFolderReferences()
         await repairOrphanedServers()
         saveLocalData()
         syncCoordinator.clearPendingMutations(for: [.server, .workspace])
@@ -318,10 +331,11 @@ final class ServerManager: ObservableObject {
     }
 
     private func applyPendingServerUpsert(_ server: Server) {
+        let normalized = normalizedServer(server)
         if let index = servers.firstIndex(where: { $0.id == server.id }) {
-            servers[index] = server
+            servers[index] = normalized
         } else {
-            servers.append(server)
+            servers.append(normalized)
         }
     }
 
@@ -331,10 +345,11 @@ final class ServerManager: ObservableObject {
     }
 
     private func applyPendingWorkspaceUpsert(_ workspace: Workspace) {
+        let normalized = normalizedWorkspace(workspace)
         if let index = workspaces.firstIndex(where: { $0.id == workspace.id }) {
-            workspaces[index] = workspace
+            workspaces[index] = normalized
         } else {
-            workspaces.append(workspace)
+            workspaces.append(normalized)
         }
     }
 
@@ -455,6 +470,7 @@ final class ServerManager: ObservableObject {
             applyPendingSyncOverlay()
             _ = reconcilePendingBootstrapWorkspaceState()
 
+            await repairOrphanedFolderReferences()
             // Check for and repair orphaned servers (workspaceId doesn't match any workspace)
             await repairOrphanedServers()
             await drainPendingCloudKitMutations()
@@ -615,6 +631,7 @@ final class ServerManager: ObservableObject {
             workspace.icon == nil &&
             workspace.order == 0 &&
             workspace.environments == ServerEnvironment.builtInEnvironments &&
+            workspace.folders.isEmpty &&
             workspace.lastSelectedEnvironmentId == nil &&
             workspace.lastSelectedServerId == nil
     }
@@ -712,7 +729,7 @@ final class ServerManager: ObservableObject {
     private func dedupedWorkspaces(from updates: [Workspace]) -> [Workspace] {
         var workspaceMap: [UUID: Workspace] = [:]
         for workspace in updates {
-            workspaceMap[workspace.id] = workspace
+            workspaceMap[workspace.id] = normalizedWorkspace(workspace)
             logger.info("Workspace from CloudKit: \(workspace.name) (id: \(workspace.id))")
         }
         return sortedWorkspaces(from: workspaceMap)
@@ -721,7 +738,7 @@ final class ServerManager: ObservableObject {
     private func dedupedServers(from updates: [Server]) -> [Server] {
         var serverMap: [UUID: Server] = [:]
         for server in updates {
-            serverMap[server.id] = server
+            serverMap[server.id] = normalizedServer(server)
             logger.info("Server from CloudKit: \(server.name) (id: \(server.id), workspaceId: \(server.workspaceId))")
         }
         return sortedServers(from: serverMap)
@@ -730,7 +747,7 @@ final class ServerManager: ObservableObject {
     private func upsertWorkspaces(_ updates: [Workspace]) {
         var workspaceMap = makeWorkspaceMap(from: workspaces)
         for workspace in updates {
-            workspaceMap[workspace.id] = workspace
+            workspaceMap[workspace.id] = normalizedWorkspace(workspace)
             logger.info("Workspace updated from CloudKit: \(workspace.name) (id: \(workspace.id))")
         }
         workspaces = sortedWorkspaces(from: workspaceMap)
@@ -739,7 +756,7 @@ final class ServerManager: ObservableObject {
     private func upsertServers(_ updates: [Server]) {
         var serverMap = makeServerMap(from: servers)
         for server in updates {
-            serverMap[server.id] = server
+            serverMap[server.id] = normalizedServer(server)
             logger.info("Server updated from CloudKit: \(server.name) (id: \(server.id), workspaceId: \(server.workspaceId))")
         }
         servers = sortedServers(from: serverMap)
@@ -795,6 +812,7 @@ final class ServerManager: ObservableObject {
                 servers[i] = Server(
                     id: servers[i].id,
                     workspaceId: defaultWorkspace.id,
+                    folderId: nil,
                     environment: servers[i].environment,
                     name: servers[i].name,
                     host: servers[i].host,
@@ -821,6 +839,32 @@ final class ServerManager: ObservableObject {
                     enqueuePendingServerUpsert(servers[i])
                 }
             }
+        }
+
+        await repairOrphanedFolderReferences()
+    }
+
+    private func repairOrphanedFolderReferences() async {
+        var repairedServers: [Server] = []
+
+        for index in servers.indices {
+            let server = servers[index]
+            guard let folderId = server.folderId else { continue }
+            guard let workspace = workspace(withId: server.workspaceId),
+                  workspace.folder(withId: folderId) == nil else {
+                continue
+            }
+
+            var updatedServer = server
+            updatedServer.folderId = nil
+            updatedServer.updatedAt = Date()
+            servers[index] = updatedServer
+            repairedServers.append(updatedServer)
+            logger.warning("Cleared invalid folder reference for server '\(updatedServer.name)'")
+        }
+
+        for server in repairedServers where isSyncEnabled {
+            enqueuePendingServerUpsert(server)
         }
     }
 
@@ -866,6 +910,7 @@ final class ServerManager: ObservableObject {
         newServer = Server(
             id: server.id,
             workspaceId: server.workspaceId,
+            folderId: validatedFolderId(server.folderId, in: server.workspaceId),
             environment: server.environment,
             name: server.name,
             host: server.host,
@@ -917,6 +962,7 @@ final class ServerManager: ObservableObject {
         updatedServer = Server(
             id: server.id,
             workspaceId: server.workspaceId,
+            folderId: validatedFolderId(server.folderId, in: server.workspaceId),
             environment: server.environment,
             name: server.name,
             host: server.host,
@@ -959,6 +1005,7 @@ final class ServerManager: ObservableObject {
         updated = Server(
             id: server.id,
             workspaceId: server.workspaceId,
+            folderId: server.folderId,
             environment: server.environment,
             name: server.name,
             host: server.host,
@@ -997,6 +1044,8 @@ final class ServerManager: ObservableObject {
             colorHex: workspace.colorHex,
             icon: workspace.icon,
             order: workspaces.count,
+            environments: workspace.environments,
+            folders: normalizedFolders(workspace.folders),
             createdAt: Date(),
             updatedAt: Date()
         )
@@ -1016,6 +1065,7 @@ final class ServerManager: ObservableObject {
             icon: workspace.icon,
             order: workspace.order,
             environments: workspace.environments,
+            folders: normalizedFolders(workspace.folders),
             lastSelectedEnvironmentId: workspace.lastSelectedEnvironmentId,
             lastSelectedServerId: workspace.lastSelectedServerId,
             createdAt: workspace.createdAt,
@@ -1059,6 +1109,7 @@ final class ServerManager: ObservableObject {
                 icon: workspace.icon,
                 order: index,
                 environments: workspace.environments,
+                folders: normalizedFolders(workspace.folders),
                 lastSelectedEnvironmentId: workspace.lastSelectedEnvironmentId,
                 lastSelectedServerId: workspace.lastSelectedServerId,
                 createdAt: workspace.createdAt,
@@ -1080,6 +1131,29 @@ final class ServerManager: ObservableObject {
         }
 
         return workspaceServers.filter { $0.environment.id == environment.id }
+    }
+
+    func topLevelServers(in workspace: Workspace, environment: ServerEnvironment?) -> [Server] {
+        servers(in: workspace, environment: environment)
+            .filter { $0.folderId == nil }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    func folderedServers(
+        in workspace: Workspace,
+        environment: ServerEnvironment?
+    ) -> [(folder: WorkspaceServerFolder, servers: [Server])] {
+        let groupedServers = Dictionary(grouping: servers(in: workspace, environment: environment).compactMap { server -> (UUID, Server)? in
+            guard let folderId = server.folderId else { return nil }
+            return (folderId, server)
+        }, by: { $0.0 })
+
+        return normalizedFolders(workspace.folders).map { folder in
+            let folderServers = (groupedServers[folder.id] ?? []).map(\.1).sorted {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+            return (folder, folderServers)
+        }
     }
 
     func recentServers(limit: Int = 5) -> [Server] {
@@ -1128,7 +1202,7 @@ final class ServerManager: ObservableObject {
 
     func moveDestinations(for server: Server) -> [Workspace] {
         let destinationIDs = moveDestinationIDs(for: server)
-        return workspacesSortedByOrder.filter { destinationIDs.contains($0.id) }
+        return workspacesSortedByOrder.filter { $0.id == server.workspaceId || destinationIDs.contains($0.id) }
     }
 
     func resolvedEnvironment(
@@ -1160,7 +1234,8 @@ final class ServerManager: ObservableObject {
     func moveServer(
         _ server: Server,
         to destination: Workspace,
-        preferredEnvironment: ServerEnvironment? = nil
+        preferredEnvironment: ServerEnvironment? = nil,
+        folderId: UUID? = nil
     ) async throws -> Server {
         guard let refreshedDestination = workspace(withId: destination.id) else {
             throw VVTermError.moveNotAllowed(String(localized: "The destination workspace is no longer available."))
@@ -1180,6 +1255,7 @@ final class ServerManager: ObservableObject {
         var updatedServer = server
         updatedServer.workspaceId = refreshedDestination.id
         updatedServer.environment = resolvedEnvironment
+        updatedServer.folderId = validatedFolderId(folderId, in: refreshedDestination.id)
 
         try await updateServer(updatedServer)
         try await updateWorkspaceSelectionMetadataAfterMove(
@@ -1369,9 +1445,128 @@ final class ServerManager: ObservableObject {
         return updatedWorkspace
     }
 
+    func createFolder(name: String, in workspace: Workspace) async throws -> WorkspaceServerFolder {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            throw VVTermError.validation(String(localized: "Folder name can't be empty."))
+        }
+
+        if workspace.folders.contains(where: { $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame }) {
+            throw VVTermError.validation(String(localized: "A folder with this name already exists in this workspace."))
+        }
+
+        let folder = WorkspaceServerFolder(
+            name: trimmedName,
+            order: workspace.folders.count
+        )
+
+        var updatedWorkspace = workspace
+        updatedWorkspace.folders = normalizedFolders(workspace.folders + [folder])
+        try await updateWorkspace(updatedWorkspace)
+        return folder
+    }
+
+    func updateFolder(_ folder: WorkspaceServerFolder, in workspace: Workspace) async throws -> Workspace {
+        let trimmedName = folder.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            throw VVTermError.validation(String(localized: "Folder name can't be empty."))
+        }
+
+        if workspace.folders.contains(where: {
+            $0.id != folder.id && $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
+        }) {
+            throw VVTermError.validation(String(localized: "A folder with this name already exists in this workspace."))
+        }
+
+        var updatedWorkspace = workspace
+        guard let index = updatedWorkspace.folders.firstIndex(where: { $0.id == folder.id }) else {
+            return workspace
+        }
+
+        var updatedFolder = folder
+        updatedFolder.name = trimmedName
+        updatedFolder.updatedAt = Date()
+        updatedWorkspace.folders[index] = updatedFolder
+        updatedWorkspace.folders = normalizedFolders(updatedWorkspace.folders)
+        try await updateWorkspace(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    func deleteFolder(_ folder: WorkspaceServerFolder, in workspace: Workspace) async throws -> Workspace {
+        var updatedWorkspace = workspace
+        updatedWorkspace.folders.removeAll { $0.id == folder.id }
+        updatedWorkspace.folders = normalizedFolders(updatedWorkspace.folders)
+        try await updateWorkspace(updatedWorkspace)
+
+        let affectedServers = servers.filter { $0.workspaceId == workspace.id && $0.folderId == folder.id }
+        for server in affectedServers {
+            var updatedServer = server
+            updatedServer.folderId = nil
+            try await updateServer(updatedServer)
+        }
+
+        return updatedWorkspace
+    }
+
+    func assignServer(
+        _ server: Server,
+        toFolder folderId: UUID?,
+        in workspace: Workspace
+    ) async throws -> Server {
+        guard server.workspaceId == workspace.id else {
+            throw VVTermError.moveNotAllowed(String(localized: "The server is no longer in this workspace."))
+        }
+
+        var updatedServer = server
+        updatedServer.folderId = validatedFolderId(folderId, in: workspace.id)
+        try await updateServer(updatedServer)
+        return updatedServer
+    }
+
     func handleAppLanguageChange() {
         guard refreshPendingBootstrapWorkspaceLocalizationIfNeeded() else { return }
         saveLocalData()
+    }
+
+    private func normalizedWorkspace(_ workspace: Workspace) -> Workspace {
+        var normalized = workspace
+        normalized.folders = normalizedFolders(workspace.folders)
+        return normalized
+    }
+
+    private func normalizedServer(_ server: Server) -> Server {
+        var normalized = server
+        normalized.folderId = validatedFolderId(server.folderId, in: server.workspaceId)
+        return normalized
+    }
+
+    private func normalizedFolders(_ folders: [WorkspaceServerFolder]) -> [WorkspaceServerFolder] {
+        var folderMap: [UUID: WorkspaceServerFolder] = [:]
+        for folder in folders {
+            folderMap[folder.id] = folder
+        }
+
+        return folderMap.values.sorted { lhs, rhs in
+            if lhs.order != rhs.order {
+                return lhs.order < rhs.order
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+        .enumerated()
+        .map { index, folder in
+            var updated = folder
+            updated.order = index
+            return updated
+        }
+    }
+
+    private func validatedFolderId(_ folderId: UUID?, in workspaceId: UUID) -> UUID? {
+        guard let folderId,
+              let workspace = workspace(withId: workspaceId),
+              workspace.folder(withId: folderId) != nil else {
+            return nil
+        }
+        return folderId
     }
 }
 
@@ -1390,6 +1585,7 @@ enum VVTermError: LocalizedError {
     case serverLocked(String)
     case workspaceLocked(String)
     case moveNotAllowed(String)
+    case validation(String)
     case connectionFailed(String)
     case authenticationFailed
     case timeout
@@ -1402,6 +1598,8 @@ enum VVTermError: LocalizedError {
         case .workspaceLocked(let workspaceName):
             return String(format: String(localized: "Workspace '%@' is locked"), workspaceName)
         case .moveNotAllowed(let message):
+            return message
+        case .validation(let message):
             return message
         case .connectionFailed(let message):
             return String(format: String(localized: "Connection failed: %@"), message)

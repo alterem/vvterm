@@ -10,6 +10,7 @@ struct Workspace: Identifiable, Codable, Hashable {
     var icon: String?
     var order: Int
     var environments: [ServerEnvironment]
+    var folders: [WorkspaceServerFolder]
     var lastSelectedEnvironmentId: UUID?
     var lastSelectedServerId: UUID?
     var createdAt: Date
@@ -22,6 +23,7 @@ struct Workspace: Identifiable, Codable, Hashable {
         icon: String? = nil,
         order: Int = 0,
         environments: [ServerEnvironment] = ServerEnvironment.builtInEnvironments,
+        folders: [WorkspaceServerFolder] = [],
         lastSelectedEnvironmentId: UUID? = nil,
         lastSelectedServerId: UUID? = nil,
         createdAt: Date = Date(),
@@ -33,6 +35,7 @@ struct Workspace: Identifiable, Codable, Hashable {
         self.icon = icon
         self.order = order
         self.environments = environments
+        self.folders = folders
         self.lastSelectedEnvironmentId = lastSelectedEnvironmentId
         self.lastSelectedServerId = lastSelectedServerId
         self.createdAt = createdAt
@@ -49,6 +52,10 @@ struct Workspace: Identifiable, Codable, Hashable {
 
     func containsEnvironment(_ candidate: ServerEnvironment) -> Bool {
         environment(withId: candidate.id) != nil
+    }
+
+    func folder(withId id: UUID) -> WorkspaceServerFolder? {
+        folders.first { $0.id == id }
     }
 
     static let defaultColors: [String] = [
