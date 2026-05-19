@@ -778,7 +778,7 @@ struct iOSServerListView: View {
 
     private func visibleChildFolders(of folder: WorkspaceServerFolder, in workspace: Workspace) -> [WorkspaceServerFolder] {
         let serversByFolderID = Dictionary(uniqueKeysWithValues: folderServerGroups(in: workspace).map { ($0.folder.id, $0.servers) })
-        workspace.childFolders(of: folder.id).filter { child in
+        return workspace.childFolders(of: folder.id).filter { child in
             folderIsVisible(child, in: workspace, serversByFolderID: serversByFolderID)
         }
     }
