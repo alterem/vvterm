@@ -2,7 +2,10 @@ import Foundation
 
 enum DeviceIdentity {
     private static let storageKey = "vvterm.deviceId"
-    private static let keychain = KeychainStore(service: "app.vivy.vvterm")
+    private static let keychain = KeychainStore(
+        service: AppKeychainIdentity.currentService,
+        legacyServices: AppKeychainIdentity.legacyServices
+    )
 
     static let id: String = {
         let storedValue = (try? keychain.getString(storageKey)) ?? nil

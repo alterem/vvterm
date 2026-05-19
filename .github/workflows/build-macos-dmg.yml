@@ -1,0 +1,163 @@
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-macos-dmg-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-macos-arm64-dmg:
+    name: Build macOS arm64 DMG
+    runs-on: macos-26
+
+    env:
+      SCHEME: VVTerm
+      PROJECT: VVTerm.xcodeproj
+      CONFIGURATION: Release
+      TEAM_ID: ${{ secrets.APPLE_TEAM_ID || 'K68RDJ84GS' }}
+      DERIVED_DATA_PATH: ${{ github.workspace }}/.build/github-actions/DerivedData
+      OUTPUT_DIR: ${{ github.workspace }}/.build/github-actions/output
+      LOG_DIR: ${{ github.workspace }}/.build/github-actions/logs
+      RESULT_BUNDLE_PATH: ${{ github.workspace }}/.build/github-actions/logs/VVTerm.xcresult
+      APP_NAME: VVTerm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Import signing certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SIGNING_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_SIGNING_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$CERTIFICATE_BASE64" ]]; then
+            echo "MACOS_SIGNING_CERTIFICATE_BASE64 is empty; macOS artifact will be built unsigned."
+            exit 0
+          fi
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/macos-signing.keychain-db"
+          CERTIFICATE_PATH="$RUNNER_TEMP/macos-signing-certificate.p12"
+
+          echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      - name: Build macOS app (arm64)
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_SIGNING_CERTIFICATE_BASE64 }}
+          CODE_SIGN_IDENTITY: ${{ secrets.MACOS_CODE_SIGN_IDENTITY }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$LOG_DIR"
+          rm -rf "$RESULT_BUNDLE_PATH"
+
+          XCODEBUILD_ARGS=(
+            -project "$PROJECT"
+            -scheme "$SCHEME"
+            -configuration "$CONFIGURATION"
+            -sdk macosx
+            -destination "platform=macOS,arch=arm64"
+            -derivedDataPath "$DERIVED_DATA_PATH"
+            -resultBundlePath "$RESULT_BUNDLE_PATH"
+            ARCHS=arm64
+            ONLY_ACTIVE_ARCH=NO
+            COMPILER_INDEX_STORE_ENABLE=NO
+          )
+
+          if [[ -n "$CERTIFICATE_BASE64" ]]; then
+            echo "Signing enabled for macOS build."
+            XCODEBUILD_ARGS+=(DEVELOPMENT_TEAM="$TEAM_ID")
+            if [[ -n "$CODE_SIGN_IDENTITY" ]]; then
+              XCODEBUILD_ARGS+=(CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY")
+            fi
+          else
+            echo "No macOS signing certificate configured; building unsigned app."
+            XCODEBUILD_ARGS+=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO)
+          fi
+
+          xcodebuild \
+            "${XCODEBUILD_ARGS[@]}" \
+            build 2>&1 | tee "$LOG_DIR/xcodebuild.log"
+
+      - name: Inspect app signature
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_SIGNING_CERTIFICATE_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          APP_PATH="$DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/$APP_NAME.app"
+          if [[ -z "$CERTIFICATE_BASE64" ]]; then
+            echo "Skipping codesign inspection because the app was intentionally built unsigned."
+            exit 0
+          fi
+
+          codesign -dv "$APP_PATH"
+          echo "::group::Embedded entitlements"
+          codesign -d --entitlements :- "$APP_PATH"
+          echo "::endgroup::"
+
+      - name: Package DMG
+        run: |
+          set -euo pipefail
+
+          APP_PATH="$DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/$APP_NAME.app"
+          mkdir -p "$OUTPUT_DIR"
+
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            VERSION_SUFFIX="${GITHUB_REF_NAME}"
+          else
+            VERSION_SUFFIX="sha-${GITHUB_SHA::7}"
+          fi
+
+          DMG_PATH="$OUTPUT_DIR/${APP_NAME}-macos-arm64-${VERSION_SUFFIX}.dmg"
+
+          bash scripts/package-macos-dmg.sh "$APP_PATH" "$DMG_PATH" "$APP_NAME"
+
+          echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VVTerm-macos-arm64-dmg
+          path: ${{ env.DMG_PATH }}
+          if-no-files-found: error
+
+      - name: Publish DMG to GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.DMG_PATH }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VVTerm-macos-arm64-build-logs
+          path: |
+            ${{ env.LOG_DIR }}/xcodebuild.log
+            ${{ env.RESULT_BUNDLE_PATH }}
+          if-no-files-found: warn

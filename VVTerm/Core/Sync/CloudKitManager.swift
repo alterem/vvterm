@@ -22,8 +22,8 @@ final class CloudKitManager: ObservableObject {
     @Published var isAvailable: Bool = false
     @Published var accountStatusDetail: String = String(localized: "Checking...")
 
-    private let container: CKContainer
-    private let database: CKDatabase
+    private let container: CKContainer?
+    private let database: CKDatabase?
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CloudKit")
     private let recordZoneName = CloudKitSyncConstants.recordZoneName
     private lazy var recordZone = CKRecordZone(zoneName: recordZoneName)
@@ -65,10 +65,21 @@ final class CloudKitManager: ObservableObject {
     private var zoneReady: Bool
 
     private init() {
-        container = CKContainer(identifier: CloudKitSyncConstants.cloudKitContainerIdentifier)
-        database = container.privateCloudDatabase
+        if CloudKitRuntimeCapabilities.hasCloudKitEntitlement {
+            let container = CKContainer(identifier: CloudKitSyncConstants.cloudKitContainerIdentifier)
+            self.container = container
+            database = container.privateCloudDatabase
+        } else {
+            container = nil
+            database = nil
+        }
         zoneReady = UserDefaults.standard.bool(forKey: CloudKitSyncConstants.zoneReadyKey(for: recordZoneName))
-        Task { await checkAccountStatus() }
+        if CloudKitRuntimeCapabilities.hasCloudKitEntitlement {
+            Task { await checkAccountStatus() }
+        } else {
+            applyMissingCloudKitEntitlementState()
+            accountStatusChecked = true
+        }
     }
 
     // MARK: - Account Status
@@ -80,6 +91,11 @@ final class CloudKitManager: ObservableObject {
             accountStatusChecked = true
             return
         }
+        guard CloudKitRuntimeCapabilities.hasCloudKitEntitlement else {
+            applyMissingCloudKitEntitlementState()
+            accountStatusChecked = true
+            return
+        }
         // Re-check when unavailable so transient account/network states can recover
         guard !accountStatusChecked || !isAvailable else { return }
         await checkAccountStatus()
@@ -88,6 +104,11 @@ final class CloudKitManager: ObservableObject {
     private func checkAccountStatus() async {
         guard isSyncEnabled else {
             applySyncDisabledState()
+            accountStatusChecked = true
+            return
+        }
+        guard let container else {
+            applyMissingCloudKitEntitlementState()
             accountStatusChecked = true
             return
         }
@@ -111,7 +132,7 @@ final class CloudKitManager: ObservableObject {
             }
 
             logger.info("CloudKit account status: \(statusDescription)")
-            logger.info("Container identifier: \(self.container.containerIdentifier ?? "nil")")
+            logger.info("Container identifier: \(container.containerIdentifier ?? "nil")")
 
             isAvailable = status == .available
             accountStatusDetail = statusDescription
@@ -137,6 +158,19 @@ final class CloudKitManager: ObservableObject {
         isAvailable = false
         syncStatus = .disabled
         accountStatusDetail = String(localized: "Disabled")
+    }
+
+    private func applyMissingCloudKitEntitlementState() {
+        isAvailable = false
+        syncStatus = .disabled
+        accountStatusDetail = String(localized: "CloudKit entitlement missing")
+    }
+
+    private func requireDatabase() throws -> CKDatabase {
+        guard let database else {
+            throw CloudKitError.notAvailable
+        }
+        return database
     }
 
     func handleSyncToggle(_ enabled: Bool) {
@@ -290,6 +324,7 @@ final class CloudKitManager: ObservableObject {
     func deleteServer(_ server: Server) async throws {
         try await prepareSyncMutation()
         let recordID = CKRecord.ID(recordName: server.id.uuidString, zoneID: recordZoneID)
+        let database = try requireDatabase()
         _ = try await performSyncMutation(
             successLog: "Deleted server \(server.name) from CloudKit",
             failureLog: "Failed to delete server"
@@ -318,6 +353,7 @@ final class CloudKitManager: ObservableObject {
     func deleteWorkspace(_ workspace: Workspace) async throws {
         try await prepareSyncMutation()
         let recordID = CKRecord.ID(recordName: workspace.id.uuidString, zoneID: recordZoneID)
+        let database = try requireDatabase()
         _ = try await performSyncMutation(
             successLog: "Deleted workspace \(workspace.name) from CloudKit",
             failureLog: "Failed to delete workspace"
@@ -363,6 +399,7 @@ final class CloudKitManager: ObservableObject {
         }
 
         try await ensureCustomZone()
+        let database = try requireDatabase()
         let recordID = CKRecord.ID(recordName: TerminalThemePreference.recordName, zoneID: recordZoneID)
 
         do {
@@ -399,6 +436,7 @@ final class CloudKitManager: ObservableObject {
         }
 
         try await ensureCustomZone()
+        let database = try requireDatabase()
         let recordID = terminalAccessoryRecordID()
 
         do {
@@ -438,6 +476,7 @@ final class CloudKitManager: ObservableObject {
 
         let recordID = terminalAccessoryRecordID()
         let normalizedLocal = localProfile.normalized()
+        let database = try requireDatabase()
 
         var baseRecord: CKRecord?
         var mergedProfile = normalizedLocal
@@ -542,6 +581,11 @@ final class CloudKitManager: ObservableObject {
     func subscribeToChanges() async {
         await ensureAccountStatusChecked()
         guard isSyncEnabled, isAvailable else { return }
+        guard CloudKitRuntimeCapabilities.hasPushNotificationsEntitlement else {
+            logger.info("Skipping CloudKit subscription because push notification entitlement is unavailable")
+            return
+        }
+        guard let database else { return }
 
         let subscriptionID = CloudKitSyncConstants.databaseSubscriptionID
 
@@ -634,6 +678,7 @@ final class CloudKitManager: ObservableObject {
         zoneID: CKRecordZone.ID,
         previousToken: CKServerChangeToken?
     ) async throws -> ZoneChangeBatch {
+        let database = try requireDatabase()
         let logger = logger
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ZoneChangeBatch, Error>) in
             let configuration = CKFetchRecordZoneChangesOperation.ZoneConfiguration(
@@ -698,7 +743,7 @@ final class CloudKitManager: ObservableObject {
                 }
             }
 
-            self.database.add(operation)
+            database.add(operation)
         }
     }
 
@@ -797,6 +842,7 @@ final class CloudKitManager: ObservableObject {
         _ record: CKRecord,
         savePolicy: CKModifyRecordsOperation.RecordSavePolicy
     ) async throws {
+        let database = try requireDatabase()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let operation = CKModifyRecordsOperation(recordsToSave: [record], recordIDsToDelete: nil)
             operation.savePolicy = savePolicy
@@ -831,6 +877,7 @@ final class CloudKitManager: ObservableObject {
         guard isAvailable else {
             throw CloudKitError.notAvailable
         }
+        let database = try requireDatabase()
 
         try await ensureCustomZone()
 
@@ -865,7 +912,7 @@ final class CloudKitManager: ObservableObject {
                     }
                 }
 
-                self.database.add(operation)
+                database.add(operation)
             }
         }
 
@@ -918,6 +965,7 @@ final class CloudKitManager: ObservableObject {
     }
 
     private func createZoneIfNeeded() async throws {
+        let database = try requireDatabase()
         let results = try await database.recordZones(for: [recordZoneID])
         if let result = results[recordZoneID] {
             switch result {

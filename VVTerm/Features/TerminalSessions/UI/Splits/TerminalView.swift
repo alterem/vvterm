@@ -30,7 +30,7 @@ struct TerminalTabView: View {
     @AppStorage(CloudKitSyncConstants.terminalThemeNameKey) private var terminalThemeName = "Aizen Dark"
     @AppStorage(CloudKitSyncConstants.terminalThemeNameLightKey) private var terminalThemeNameLight = "Aizen Light"
     @AppStorage(CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) private var usePerAppearanceTheme = true
-    @AppStorage("terminalVoiceButtonEnabled") private var voiceButtonEnabled = true
+    @AppStorage("terminalVoiceButtonEnabled") private var voiceButtonEnabled = false
 
     @StateObject private var audioService = AudioService()
     @State private var showingVoiceRecording = false
@@ -313,7 +313,8 @@ struct TerminalTabView: View {
             }
         }
 
-        guard MacTerminalShortcut.toggleVoiceRecording.matches(event) else {
+        guard voiceButtonEnabled,
+              MacTerminalShortcut.toggleVoiceRecording.matches(event) else {
             return event
         }
         toggleVoiceRecording()
@@ -321,6 +322,7 @@ struct TerminalTabView: View {
     }
 
     private func toggleVoiceRecording() {
+        guard voiceButtonEnabled || showingVoiceRecording else { return }
         if showingVoiceRecording {
             Task {
                 let text = await audioService.stopRecording()
@@ -405,7 +407,7 @@ struct TerminalPaneView: View {
     @AppStorage(CloudKitSyncConstants.terminalThemeNameKey) private var terminalThemeName = "Aizen Dark"
     @AppStorage(CloudKitSyncConstants.terminalThemeNameLightKey) private var terminalThemeNameLight = "Aizen Light"
     @AppStorage(CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) private var usePerAppearanceTheme = true
-    @AppStorage("sshAutoReconnect") private var autoReconnectEnabled = true
+    @AppStorage("sshAutoReconnect") private var autoReconnectEnabled = false
 
     private var paneState: TerminalPaneState? {
         TerminalTabManager.shared.paneStates[paneId]

@@ -66,7 +66,7 @@ struct ConnectionSession: Identifiable, Hashable {
         createdAt: Date = Date(),
         lastActivity: Date = Date(),
         terminalSurfaceId: String? = nil,
-        autoReconnect: Bool = true,
+        autoReconnect: Bool = false,
         tmuxStatus: TmuxStatus = .unknown,
         workingDirectory: String? = nil,
         activeTransport: ShellTransport = .ssh,

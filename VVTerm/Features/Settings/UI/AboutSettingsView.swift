@@ -143,10 +143,7 @@ struct AboutSettingsView: View {
                 }
                 .tint(.primary)
                 .foregroundStyle(.primary)
-            }
 
-            #if os(iOS)
-            Section("Get in Touch") {
                 ForEach(contactOptions) { option in
                     Button {
                         openURL(option.url)
@@ -188,7 +185,6 @@ struct AboutSettingsView: View {
                     .tint(.primary)
                 }
             }
-            #endif
 
             Section {
                 #if os(iOS)
@@ -221,12 +217,14 @@ struct AboutSettingsView: View {
         }
     }
 
-    #if os(iOS)
     private func openURL(_ urlString: String) {
         guard let url = URL(string: urlString) else { return }
+        #if os(macOS)
+        NSWorkspace.shared.open(url)
+        #else
         UIApplication.shared.open(url)
+        #endif
     }
-    #endif
 }
 
 // MARK: - Review Mode Sheet

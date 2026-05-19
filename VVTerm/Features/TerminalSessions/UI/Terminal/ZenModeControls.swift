@@ -311,6 +311,7 @@ struct MacOSZenModePanel: View {
     let onNewTerminalTab: () -> Void
     let onCloseTerminalTab: (TerminalTab) -> Void
     let onNewFileTab: () -> Void
+    let onOpenCodeBlocks: () -> Void
     let onCloseFileTab: (RemoteFileTab) -> Void
     let onSelectFileTab: (RemoteFileTab) -> Void
     let onSplitRight: () -> Void
@@ -382,6 +383,12 @@ struct MacOSZenModePanel: View {
                     onNewFileTab()
                 } else {
                     onNewTerminalTab()
+                }
+            }
+
+            if selectedView == ConnectionViewTab.terminal.id {
+                ZenModeActionButton(title: LocalizedStringKey("Code Blocks"), systemImage: "curlybraces.square") {
+                    onOpenCodeBlocks()
                 }
             }
 
@@ -621,6 +628,7 @@ struct IOSZenModePanel: View {
     let onCloseFileTab: (RemoteFileTab) -> Void
     let onNewTerminalTab: () -> Void
     let onNewFileTab: () -> Void
+    let onOpenCodeBlocks: () -> Void
     let onOpenSettings: () -> Void
     let onEditServer: (() -> Void)?
     let onDisconnect: () -> Void
@@ -655,6 +663,12 @@ struct IOSZenModePanel: View {
                         onNewFileTab()
                     } else {
                         onNewTerminalTab()
+                    }
+                }
+
+                if selectedView == ConnectionViewTab.terminal.id {
+                    ZenModeActionButton(title: LocalizedStringKey("Code Blocks"), systemImage: "curlybraces.square") {
+                        onOpenCodeBlocks()
                     }
                 }
 

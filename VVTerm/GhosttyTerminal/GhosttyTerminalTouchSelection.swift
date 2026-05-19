@@ -1,10 +1,4 @@
-#if os(iOS)
-import UIKit
-
-enum TerminalTouchSelectionStyle {
-    static let tintColor = UIColor(red: 0.90, green: 0.73, blue: 0.26, alpha: 1)
-    static let highlightColor = tintColor.withAlphaComponent(0.40)
-}
+import Foundation
 
 struct TerminalGridPoint: Comparable, Equatable {
     var row: Int
@@ -33,6 +27,14 @@ struct TerminalGridSelection: Equatable {
     var normalized: TerminalGridSelection {
         .init(start: orderedStart, end: orderedEnd)
     }
+}
+
+#if os(iOS)
+import UIKit
+
+enum TerminalTouchSelectionStyle {
+    static let tintColor = UIColor(red: 0.90, green: 0.73, blue: 0.26, alpha: 1)
+    static let highlightColor = tintColor.withAlphaComponent(0.40)
 }
 
 enum TerminalTouchSelectionHandleKind {

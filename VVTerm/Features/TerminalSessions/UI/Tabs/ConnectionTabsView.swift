@@ -40,6 +40,7 @@ struct ConnectionTerminalContainer: View {
     @State private var showingFileTabLimitAlert = false
     @State private var showingSplitPaneUpgradeAlert = false
     @State private var showingZenPanel = false
+    @State private var showingSnippetPicker = false
     #if os(macOS)
     @State private var zenWindowSafeAreaInsets = EdgeInsets()
     #endif
@@ -219,6 +220,14 @@ struct ConnectionTerminalContainer: View {
                     }
                 )
             }
+            .sheet(isPresented: $showingSnippetPicker) {
+                TerminalSnippetPickerView(
+                    onInsert: { snippet in
+                        insertSnippetIntoCurrentPane(snippet)
+                    },
+                    onManage: openCodeBlocksSettings
+                )
+            }
     }
 
     @ViewBuilder
@@ -357,6 +366,19 @@ struct ConnectionTerminalContainer: View {
                 ? ConnectionViewTab.files.id
                 : viewTabConfig.effectiveDefaultTab()
         }
+    }
+
+    private func insertSnippetIntoCurrentPane(_ snippet: TerminalSnippetEntry) {
+        guard let paneId = selectedTab?.focusedPaneId else { return }
+        TerminalSnippetInsertion.insertIntoCurrentPane(snippet, paneId: paneId)
+    }
+
+    private func openCodeBlocksSettings() {
+        #if os(macOS)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            SettingsWindowManager.shared.show(selection: .codeBlocks)
+        }
+        #endif
     }
 
     private func selectPreviousTab() {
@@ -610,6 +632,12 @@ struct ConnectionTerminalContainer: View {
 
     @ToolbarContentBuilder
     private var trailingToolbarItems: some ToolbarContent {
+        if selectedView == ConnectionViewTab.terminal.id, selectedTab != nil {
+            ToolbarItem(placement: .primaryAction) {
+                snippetsToolbarButton
+            }
+        }
+
         if selectedView == "files" {
             ToolbarItem(placement: .primaryAction) {
                 filesActionsToolbarButton
@@ -635,6 +663,16 @@ struct ConnectionTerminalContainer: View {
                 .labelStyle(.iconOnly)
         }
         .help(Text("Enter Zen Mode"))
+    }
+
+    private var snippetsToolbarButton: some View {
+        Button {
+            showingSnippetPicker = true
+        } label: {
+            Label(String(localized: "Code Blocks"), systemImage: "curlybraces.square")
+                .labelStyle(.iconOnly)
+        }
+        .help(Text(String(localized: "Open code blocks and insert into the current terminal")))
     }
 
     private var filesActionsToolbarButton: some View {
@@ -778,6 +816,10 @@ struct ConnectionTerminalContainer: View {
                 onNewFileTab: {
                     showingZenPanel = false
                     openNewFileTab(selectFilesViewOnSuccess: true)
+                },
+                onOpenCodeBlocks: {
+                    showingZenPanel = false
+                    showingSnippetPicker = true
                 },
                 onCloseFileTab: { tab in
                     if let removedTab = fileTabManager.closeTab(tab) {

@@ -15,6 +15,7 @@ struct KeychainSettingsView: View {
     @State private var showingDeleteConfirmation = false
     @State private var keyToDelete: SSHKeyEntry?
     @State private var keyToShowDetails: SSHKeyEntry?
+    @State private var keyToEdit: SSHKeyEntry?
     @State private var error: String?
 
     var body: some View {
@@ -25,12 +26,53 @@ struct KeychainSettingsView: View {
                 Form {
                     Section {
                         ForEach(storedKeys) { key in
-                            Button {
-                                keyToShowDetails = key
-                            } label: {
+                            HStack(spacing: 8) {
                                 SSHKeyRow(key: key)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        keyToShowDetails = key
+                                    }
+
+                                Menu {
+                                    Button {
+                                        keyToShowDetails = key
+                                    } label: {
+                                        Label(String(localized: "Details"), systemImage: "info.circle")
+                                    }
+
+                                    Button {
+                                        keyToEdit = key
+                                    } label: {
+                                        Label(String(localized: "Edit"), systemImage: "pencil")
+                                    }
+
+                                    Button {
+                                        if let publicKey = key.publicKey {
+                                            copyToClipboard(publicKey)
+                                        }
+                                    } label: {
+                                        Label(String(localized: "Copy public key"), systemImage: "doc.on.doc")
+                                    }
+                                    .disabled(key.publicKey == nil)
+
+                                    Divider()
+
+                                    Button(role: .destructive) {
+                                        keyToDelete = key
+                                        showingDeleteConfirmation = true
+                                    } label: {
+                                        Label(String(localized: "Delete"), systemImage: "trash")
+                                    }
+                                } label: {
+                                    Image(systemName: "ellipsis.circle")
+                                        .font(.title3)
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 32, height: 32)
+                                }
+                                .menuStyle(.button)
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(String(localized: "Actions"))
                             }
-                            .buttonStyle(.plain)
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button(role: .destructive) {
                                     keyToDelete = key
@@ -97,8 +139,9 @@ struct KeychainSettingsView: View {
             loadKeys()
         }
         .sheet(isPresented: $showingAddKey) {
-            AddSSHKeySheet(onSave: { _ in
+            AddSSHKeySheet(onSave: { entry in
                 loadKeys()
+                keyToShowDetails = entry
             })
         }
         .sheet(isPresented: $showingGenerateKey) {
@@ -107,8 +150,17 @@ struct KeychainSettingsView: View {
                 keyToShowDetails = entry
             })
         }
+        .sheet(item: $keyToEdit) { key in
+            EditSSHKeySheet(keyEntry: key, onSave: { entry in
+                loadKeys()
+                keyToShowDetails = entry
+            })
+        }
         .sheet(item: $keyToShowDetails) { key in
-            KeyDetailsSheet(keyEntry: key)
+            KeyDetailsSheet(keyEntry: key, onEdit: {
+                keyToShowDetails = nil
+                keyToEdit = key
+            })
         }
         .alert(
             "Delete SSH Key",
@@ -247,8 +299,10 @@ struct AddSSHKeySheet: View {
 
     @State private var name: String = ""
     @State private var keyContent: String = ""
+    @State private var publicKey: String = ""
     @State private var passphrase: String = ""
     @State private var showingKeyImporter = false
+    @State private var showingPublicKeyImporter = false
     @State private var isSaving = false
     @State private var error: String?
 
@@ -262,7 +316,7 @@ struct AddSSHKeySheet: View {
                 Section("Private Key") {
                     Menu {
                         Button("Import Key File") {
-                            showingKeyImporter = true
+                            presentPrivateKeyImporter()
                         }
 
                         Button("Paste") {
@@ -277,6 +331,31 @@ struct AddSSHKeySheet: View {
                             .font(.caption)
                             .foregroundStyle(.green)
                     }
+                }
+
+                Section {
+                    Menu {
+                        Button("Import Public Key File") {
+                            presentPublicKeyImporter()
+                        }
+
+                        Button("Paste") {
+                            pastePublicKeyFromClipboard()
+                        }
+                    } label: {
+                        Label(publicKey.isEmpty ? "Add Public Key" : "Replace Public Key", systemImage: "person.badge.key")
+                    }
+
+                    if !publicKey.isEmpty {
+                        Text(publicKey)
+                            .font(.system(.caption, design: .monospaced))
+                            .lineLimit(3)
+                            .textSelection(.enabled)
+                    }
+                } header: {
+                    Text(String(localized: "Public Key"))
+                } footer: {
+                    Text(String(localized: "Add this to your server's ~/.ssh/authorized_keys file:"))
                 }
 
                 Section {
@@ -310,6 +389,7 @@ struct AddSSHKeySheet: View {
                     .disabled(!isValid || isSaving)
                 }
             }
+            #if os(iOS)
             .fileImporter(
                 isPresented: $showingKeyImporter,
                 allowedContentTypes: [.data, .text],
@@ -317,11 +397,19 @@ struct AddSSHKeySheet: View {
             ) { result in
                 handleKeyImport(result)
             }
+            .fileImporter(
+                isPresented: $showingPublicKeyImporter,
+                allowedContentTypes: [.data, .text],
+                allowsMultipleSelection: false
+            ) { result in
+                handlePublicKeyImport(result)
+            }
+            #endif
         }
     }
 
     private var isValid: Bool {
-        !name.isEmpty && !keyContent.isEmpty
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !keyContent.isEmpty
     }
 
     private func extractKeyName(from keyContent: String) -> String {
@@ -350,31 +438,123 @@ struct AddSSHKeySheet: View {
         #endif
     }
 
+    private func pastePublicKeyFromClipboard() {
+        #if os(iOS)
+        if let key = UIPasteboard.general.string {
+            publicKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty {
+                name = extractKeyName(from: key)
+            }
+        }
+        #elseif os(macOS)
+        if let key = NSPasteboard.general.string(forType: .string) {
+            publicKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty {
+                name = extractKeyName(from: key)
+            }
+        }
+        #endif
+    }
+
+    private func presentPrivateKeyImporter() {
+        #if os(macOS)
+        presentMacOSKeyOpenPanel(
+            title: String(localized: "Import Key File"),
+            prompt: String(localized: "Import Key")
+        ) { url in
+            importPrivateKeyFile(from: url)
+        }
+        #else
+        showingKeyImporter = true
+        #endif
+    }
+
+    private func presentPublicKeyImporter() {
+        #if os(macOS)
+        presentMacOSKeyOpenPanel(
+            title: String(localized: "Import Public Key File"),
+            prompt: String(localized: "Add Public Key")
+        ) { url in
+            importPublicKeyFile(from: url)
+        }
+        #else
+        showingPublicKeyImporter = true
+        #endif
+    }
+
+    #if os(macOS)
+    private func presentMacOSKeyOpenPanel(title: String, prompt: String, onChoose: (URL) -> Void) {
+        let panel = NSOpenPanel()
+        panel.title = title
+        panel.prompt = prompt
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = true
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        onChoose(url)
+    }
+    #endif
+
     private func handleKeyImport(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
             guard let url = urls.first else { return }
-            guard url.startAccessingSecurityScopedResource() else {
-                self.error = String(localized: "Cannot access the selected file")
-                return
-            }
-            defer { url.stopAccessingSecurityScopedResource() }
-
-            do {
-                let content = try String(contentsOf: url, encoding: .utf8)
-                keyContent = content
-
-                // Auto-fill name from filename
-                if name.isEmpty {
-                    let filename = url.deletingPathExtension().lastPathComponent
-                    name = filename.replacingOccurrences(of: "id_", with: "").capitalized + " Key"
-                }
-            } catch {
-                self.error = String(format: String(localized: "Failed to read key file: %@"), error.localizedDescription)
-            }
+            importPrivateKeyFile(from: url)
         case .failure(let error):
             self.error = String(format: String(localized: "Failed to import key: %@"), error.localizedDescription)
         }
+    }
+
+    private func handlePublicKeyImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            importPublicKeyFile(from: url)
+        case .failure(let error):
+            self.error = String(format: String(localized: "Failed to import key: %@"), error.localizedDescription)
+        }
+    }
+
+    private func importPrivateKeyFile(from url: URL) {
+        do {
+            keyContent = try readTextFile(from: url)
+
+            if name.isEmpty {
+                name = suggestedKeyName(from: url)
+            }
+        } catch {
+            self.error = String(format: String(localized: "Failed to read key file: %@"), error.localizedDescription)
+        }
+    }
+
+    private func importPublicKeyFile(from url: URL) {
+        do {
+            publicKey = try readTextFile(from: url).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if name.isEmpty {
+                name = suggestedKeyName(from: url)
+            }
+        } catch {
+            self.error = String(format: String(localized: "Failed to read key file: %@"), error.localizedDescription)
+        }
+    }
+
+    private func readTextFile(from url: URL) throws -> String {
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func suggestedKeyName(from url: URL) -> String {
+        let filename = url.deletingPathExtension().lastPathComponent
+        return filename.replacingOccurrences(of: "id_", with: "").capitalized + " Key"
     }
 
     private func saveKey() {
@@ -389,15 +569,114 @@ struct AddSSHKeySheet: View {
 
         do {
             let entry = try KeychainManager.shared.storeSSHKeyEntry(
-                name: name,
+                name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                 privateKey: keyData,
-                passphrase: passphrase.isEmpty ? nil : passphrase
+                passphrase: passphrase.isEmpty ? nil : passphrase,
+                publicKey: publicKey.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
             )
             onSave(entry)
             dismiss()
         } catch {
             self.error = String(format: String(localized: "Failed to save key: %@"), error.localizedDescription)
             isSaving = false
+        }
+    }
+}
+
+// MARK: - Edit SSH Key Sheet
+
+struct EditSSHKeySheet: View {
+    let keyEntry: SSHKeyEntry
+    let onSave: (SSHKeyEntry) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name: String
+    @State private var publicKey: String
+    @State private var passphrase: String = ""
+    @State private var clearPassphrase = false
+    @State private var isSaving = false
+    @State private var error: String?
+
+    init(keyEntry: SSHKeyEntry, onSave: @escaping (SSHKeyEntry) -> Void) {
+        self.keyEntry = keyEntry
+        self.onSave = onSave
+        _name = State(initialValue: keyEntry.name)
+        _publicKey = State(initialValue: keyEntry.publicKey ?? "")
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Key Name") {
+                    TextField("e.g., Personal MacBook, Work Key", text: $name)
+                }
+
+                Section {
+                    TextEditor(text: $publicKey)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 96)
+                } header: {
+                    Text(String(localized: "Public Key"))
+                } footer: {
+                    Text(String(localized: "Add this to your server's ~/.ssh/authorized_keys file:"))
+                }
+
+                Section {
+                    SecureField("New passphrase", text: $passphrase)
+                        .disabled(clearPassphrase)
+
+                    Toggle(String(localized: "Remove saved passphrase"), isOn: $clearPassphrase)
+                } header: {
+                    Text("Passphrase (Optional)")
+                } footer: {
+                    Text(String(localized: "Leave blank to keep the current passphrase."))
+                }
+
+                if let error = error {
+                    Section {
+                        Text(error)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .navigationTitle(String(localized: "Edit SSH Key"))
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        saveChanges()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
+                }
+            }
+        }
+    }
+
+    private func saveChanges() {
+        isSaving = true
+        error = nil
+
+        do {
+            let entry = try KeychainManager.shared.updateStoredSSHKeyEntry(
+                keyEntry.id,
+                name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                replacementPassphrase: passphrase.isEmpty ? nil : passphrase,
+                removePassphrase: clearPassphrase,
+                keyType: keyEntry.keyType,
+                publicKey: publicKey.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            )
+            onSave(entry)
+            dismiss()
+        } catch {
+            self.error = String(format: String(localized: "Failed to save key: %@"), error.localizedDescription)
+            self.isSaving = false
         }
     }
 }
@@ -515,6 +794,7 @@ struct GenerateSSHKeySheet: View {
 
 struct KeyDetailsSheet: View {
     let keyEntry: SSHKeyEntry
+    var onEdit: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
@@ -576,6 +856,16 @@ struct KeyDetailsSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
+                if let onEdit {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            onEdit()
+                        } label: {
+                            Label(String(localized: "Edit"), systemImage: "pencil")
+                        }
+                    }
+                }
+
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
@@ -664,6 +954,12 @@ struct PublicKeyDisplaySheet: View {
         NSPasteboard.general.setString(text, forType: .string)
         #endif
         copied = true
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
 

@@ -12,7 +12,7 @@ struct TranscriptionSettingsView: View {
     @AppStorage(TranscriptionSettingsKeys.mlxWhisperModelId) private var whisperModelId = TranscriptionSettingsDefaults.mlxWhisperModelId
     @AppStorage(TranscriptionSettingsKeys.mlxParakeetModelId) private var parakeetModelId = TranscriptionSettingsDefaults.mlxParakeetModelId
     @AppStorage("transcriptionLanguage") private var language = "en"
-    @AppStorage("terminalVoiceButtonEnabled") private var terminalVoiceButtonEnabled = true
+    @AppStorage("terminalVoiceButtonEnabled") private var terminalVoiceButtonEnabled = false
 
     @StateObject private var whisperManager: MLXModelManager
     @StateObject private var parakeetManager: MLXModelManager
@@ -42,11 +42,11 @@ struct TranscriptionSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Show voice input button", isOn: $terminalVoiceButtonEnabled)
+                Toggle("Enable voice transcription", isOn: $terminalVoiceButtonEnabled)
             } header: {
                 Text("Terminal")
             } footer: {
-                Text("Cmd + Shift + M always works, even when the button is hidden.")
+                Text("Voice transcription is off by default. Turning it on enables the mic button and keyboard shortcuts.")
             }
 
             Section {

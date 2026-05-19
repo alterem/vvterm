@@ -31,6 +31,7 @@ struct VVTermApp: App {
     @StateObject private var remoteFileBrowserStore = VVTermApp.makeRemoteFileBrowserStore()
     @StateObject private var terminalThemeManager = TerminalThemeManager.shared
     @StateObject private var terminalAccessoryPreferencesManager = TerminalAccessoryPreferencesManager.shared
+    @StateObject private var terminalSnippetManager = TerminalSnippetManager.shared
 
     // Welcome screen flag
     @AppStorage("hasSeenWelcome") private var hasSeenWelcome = false
@@ -79,6 +80,7 @@ struct VVTermApp: App {
                             .environmentObject(ghosttyApp)
                             .environmentObject(terminalThemeManager)
                             .environmentObject(terminalAccessoryPreferencesManager)
+                            .environmentObject(terminalSnippetManager)
                             .modifier(AppearanceModifier())
                             .task(id: "\(terminalFontName)\(terminalFontSize)\(terminalThemeName)\(terminalThemeNameLight)\(usePerAppearanceTheme)\(activeCustomThemeVersionToken)") {
                                 ghosttyApp.reloadConfig()
@@ -97,6 +99,7 @@ struct VVTermApp: App {
                             .environmentObject(ghosttyApp)
                             .environmentObject(terminalThemeManager)
                             .environmentObject(terminalAccessoryPreferencesManager)
+                            .environmentObject(terminalSnippetManager)
                             .modifier(AppearanceModifier())
                             .task(id: "\(terminalFontName)\(terminalFontSize)\(terminalThemeName)\(terminalThemeNameLight)\(usePerAppearanceTheme)\(activeCustomThemeVersionToken)") {
                                 ghosttyApp.reloadConfig()
@@ -252,7 +255,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             await CloudKitManager.shared.subscribeToChanges()
         }
-        NSApplication.shared.registerForRemoteNotifications()
+        if CloudKitRuntimeCapabilities.hasPushNotificationsEntitlement {
+            NSApplication.shared.registerForRemoteNotifications()
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -310,7 +315,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         Task {
             await CloudKitManager.shared.subscribeToChanges()
         }
-        application.registerForRemoteNotifications()
+        if CloudKitRuntimeCapabilities.hasPushNotificationsEntitlement {
+            application.registerForRemoteNotifications()
+        }
 
         return true
     }

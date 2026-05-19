@@ -31,6 +31,11 @@ final class ServerManager: ObservableObject {
         let canReplaceLocalState: Bool
     }
 
+    struct WebDAVSnapshot {
+        var servers: [Server]
+        var workspaces: [Workspace]
+    }
+
     private init() {
         // Load local data first (fast)
         loadLocalData()
@@ -73,6 +78,19 @@ final class ServerManager: ObservableObject {
     private func saveLocalData() {
         storeServers(servers)
         storeWorkspaces(workspaces)
+    }
+
+    func webDAVSnapshot() -> WebDAVSnapshot {
+        WebDAVSnapshot(servers: servers, workspaces: workspaces)
+    }
+
+    func applyWebDAVSnapshot(servers remoteServers: [Server], workspaces remoteWorkspaces: [Workspace]) async {
+        workspaces = dedupedWorkspaces(from: remoteWorkspaces)
+        servers = dedupedServers(from: remoteServers)
+        await repairOrphanedServers()
+        saveLocalData()
+        syncCoordinator.clearPendingMutations(for: [.server, .workspace])
+        logger.info("Applied WebDAV snapshot: \(self.workspaces.count) workspaces, \(self.servers.count) servers")
     }
 
     private func loadStoredServers() -> [Server]? {

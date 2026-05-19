@@ -25,6 +25,7 @@ enum SettingsSelection: Hashable {
     case pro
     case general
     case terminal
+    case codeBlocks
     case transcription
     case keychain
     case sync
@@ -34,15 +35,29 @@ enum SettingsSelection: Hashable {
 // MARK: - Settings View
 
 struct SettingsView: View {
+    private let initialNavigationSelection: SettingsSelection?
+
     @AppStorage(TerminalDefaults.fontNameKey) private var terminalFontName = TerminalDefaults.defaultFontName
     @AppStorage(TerminalDefaults.fontSizeKey) private var terminalFontSize = TerminalDefaults.defaultFontSize
 
-    @State private var selection: SettingsSelection? = .pro
+    @State private var selection: SettingsSelection?
     @StateObject private var storeManager = StoreManager.shared
+    #if os(iOS)
+    @State private var navigationPath: [SettingsSelection] = []
+    @State private var hasAppliedInitialNavigationSelection = false
+    #endif
 
     #if os(iOS)
     @Environment(\.dismiss) private var dismiss
     #endif
+
+    init(
+        initialSelection: SettingsSelection = .pro,
+        initialNavigationSelection: SettingsSelection? = nil
+    ) {
+        self.initialNavigationSelection = initialNavigationSelection
+        _selection = State(initialValue: initialSelection)
+    }
 
     var body: some View {
         #if os(macOS)
@@ -64,6 +79,7 @@ struct SettingsView: View {
 
                 settingsRow("General", icon: "gear", tag: .general)
                 settingsRow("Terminal", icon: "terminal", tag: .terminal)
+                settingsRow(LocalizedStringKey("Code Blocks"), icon: "curlybraces.square", tag: .codeBlocks)
                 settingsRow("Transcription", icon: "waveform", tag: .transcription)
                 settingsRow("SSH Keys", icon: "key", tag: .keychain)
                 settingsRow("Sync", icon: "icloud", tag: .sync)
@@ -82,120 +98,14 @@ struct SettingsView: View {
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 700, minHeight: 500)
         #else
-        NavigationStack {
-            List {
-                // Pro card at top
-                Section {
-                    NavigationLink {
-                        ProSettingsView()
-                            .navigationTitle("VVTerm Pro")
-                            .navigationBarTitleDisplayMode(.inline)
-                    } label: {
-                        HStack(spacing: 12) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(LinearGradient(
-                                        colors: [Color.orange, Color(red: 0.95, green: 0.5, blue: 0.2)],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ))
-                                    .frame(width: 36, height: 36)
-                                Image(systemName: "sparkles")
-                                    .font(.system(size: 16, weight: .bold))
-                                    .foregroundStyle(.white)
-                            }
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("VVTerm Pro")
-                                    .font(.headline)
-                                Text(storeManager.isPro ? String(localized: "Manage subscription") : String(localized: "Upgrade for unlimited features"))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-
-                            Text(storeManager.isPro ? String(localized: "PRO") : String(localized: "FREE_PLAN"))
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(storeManager.isPro ? .white : .primary.opacity(0.7))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(
-                                    Capsule()
-                                        .fill(storeManager.isPro
-                                            ? Color.orange
-                                            : Color.primary.opacity(0.12)
-                                        )
-                                )
-                        }
-                        .padding(.vertical, 4)
-                    }
+        NavigationStack(path: $navigationPath) {
+            settingsList
+                .navigationDestination(for: SettingsSelection.self) { selection in
+                    settingsDestination(for: selection)
                 }
-
-                Section {
-                    NavigationLink {
-                        GeneralSettingsView()
-                            .navigationTitle("General")
-                            .navigationBarTitleDisplayMode(.inline)
-                    } label: {
-                        Label("General", systemImage: "gear")
-                    }
-
-                    NavigationLink {
-                        TerminalSettingsView(fontName: $terminalFontName, fontSize: $terminalFontSize)
-                            .navigationTitle("Terminal")
-                            .navigationBarTitleDisplayMode(.inline)
-                    } label: {
-                        Label("Terminal", systemImage: "terminal")
-                    }
-
-                    NavigationLink {
-                        TranscriptionSettingsView()
-                            .navigationTitle("Transcription")
-                            .navigationBarTitleDisplayMode(.inline)
-                    } label: {
-                        Label("Transcription", systemImage: "waveform")
-                    }
-
-                    NavigationLink {
-                        KeychainSettingsView()
-                            .navigationTitle("SSH Keys")
-                            .navigationBarTitleDisplayMode(.inline)
-                    } label: {
-                        Label("SSH Keys", systemImage: "key")
-                    }
-
-                    NavigationLink {
-                        SyncSettingsView()
-                            .navigationTitle("Sync")
-                            .navigationBarTitleDisplayMode(.inline)
-                    } label: {
-                        Label("Sync", systemImage: "icloud")
-                    }
-
-                    NavigationLink {
-                        AboutSettingsView()
-                            .navigationTitle("About")
-                            .navigationBarTitleDisplayMode(.inline)
-                    } label: {
-                        Label("About", systemImage: "info.circle")
-                    }
-                }
-            }
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .semibold))
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
+        }
+        .onAppear {
+            applyInitialNavigationSelectionIfNeeded()
         }
         #endif
     }
@@ -219,6 +129,10 @@ struct SettingsView: View {
                             TerminalSettingsView(fontName: $terminalFontName, fontSize: $terminalFontSize)
                                 .navigationTitle("Terminal")
                                 .navigationSubtitle(String(localized: "Font, theme, and connection settings"))
+        case .codeBlocks:
+                            TerminalSnippetLibraryView()
+                                .navigationTitle(String(localized: "Code Blocks"))
+                                .navigationSubtitle(String(localized: "Manage reusable code blocks for any terminal"))
         case .transcription:
                             TranscriptionSettingsView()
                                 .navigationTitle("Transcription")
@@ -295,6 +209,170 @@ struct SettingsView: View {
             .tag(tag)
     }
     #endif
+
+    #if os(iOS)
+    private var settingsList: some View {
+        List {
+            Section {
+                NavigationLink(value: SettingsSelection.pro) {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(LinearGradient(
+                                    colors: [Color.orange, Color(red: 0.95, green: 0.5, blue: 0.2)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ))
+                                .frame(width: 36, height: 36)
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(.white)
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("VVTerm Pro")
+                                .font(.headline)
+                            Text(storeManager.isPro ? String(localized: "Manage subscription") : String(localized: "Upgrade for unlimited features"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        Text(storeManager.isPro ? String(localized: "PRO") : String(localized: "FREE_PLAN"))
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(storeManager.isPro ? .white : .primary.opacity(0.7))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule()
+                                    .fill(storeManager.isPro
+                                        ? Color.orange
+                                        : Color.primary.opacity(0.12)
+                                    )
+                            )
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
+            Section {
+                settingsNavigationLink("General", icon: "gear", selection: .general)
+                settingsNavigationLink("Terminal", icon: "terminal", selection: .terminal)
+                settingsNavigationLink(String(localized: "Code Blocks"), icon: "curlybraces.square", selection: .codeBlocks)
+                settingsNavigationLink("Transcription", icon: "waveform", selection: .transcription)
+                settingsNavigationLink("SSH Keys", icon: "key", selection: .keychain)
+                settingsNavigationLink("Sync", icon: "icloud", selection: .sync)
+                settingsNavigationLink("About", icon: "info.circle", selection: .about)
+            }
+        }
+        .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .semibold))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func settingsNavigationLink(
+        _ title: String,
+        icon: String,
+        selection: SettingsSelection
+    ) -> some View {
+        NavigationLink(value: selection) {
+            Label(title, systemImage: icon)
+        }
+    }
+
+    private func applyInitialNavigationSelectionIfNeeded() {
+        guard !hasAppliedInitialNavigationSelection else { return }
+        hasAppliedInitialNavigationSelection = true
+
+        guard let initialNavigationSelection else { return }
+        navigationPath = [initialNavigationSelection]
+    }
+    #endif
+
+    @ViewBuilder
+    private func settingsDestination(for selection: SettingsSelection) -> some View {
+        switch selection {
+        case .pro:
+            ProSettingsView()
+                .navigationTitle("VVTerm Pro")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #else
+                .navigationSubtitle(storeManager.isPro
+                    ? String(localized: "Manage your subscription")
+                    : String(localized: "Upgrade for unlimited features")
+                )
+                #endif
+        case .general:
+            GeneralSettingsView()
+                .navigationTitle("General")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #else
+                .navigationSubtitle(String(localized: "Appearance and preferences"))
+                #endif
+        case .terminal:
+            TerminalSettingsView(fontName: $terminalFontName, fontSize: $terminalFontSize)
+                .navigationTitle("Terminal")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #else
+                .navigationSubtitle(String(localized: "Font, theme, and connection settings"))
+                #endif
+        case .codeBlocks:
+            TerminalSnippetLibraryView()
+                .navigationTitle(String(localized: "Code Blocks"))
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #else
+                .navigationSubtitle(String(localized: "Manage reusable code blocks for any terminal"))
+                #endif
+        case .transcription:
+            TranscriptionSettingsView()
+                .navigationTitle("Transcription")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #else
+                .navigationSubtitle(String(localized: "Speech-to-text engine and models"))
+                #endif
+        case .keychain:
+            KeychainSettingsView()
+                .navigationTitle("SSH Keys")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #else
+                .navigationSubtitle(String(localized: "Manage stored SSH keys"))
+                #endif
+        case .sync:
+            SyncSettingsView()
+                .navigationTitle("Sync")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #else
+                .navigationSubtitle(String(localized: "iCloud sync and data management"))
+                #endif
+        case .about:
+            AboutSettingsView()
+                .navigationTitle("About")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #else
+                .navigationSubtitle(String(localized: "Version and links"))
+                #endif
+        }
+    }
 }
 
 // MARK: - Preview

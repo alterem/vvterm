@@ -69,6 +69,14 @@ struct ContentView: View {
         columnVisibility != .detailOnly
     }
 
+    private var detailLeadingPadding: CGFloat {
+        #if os(macOS)
+        return effectiveZenModeEnabled ? 0 : 6
+        #else
+        return 0
+        #endif
+    }
+
     @ViewBuilder
     private var detailContent: some View {
         if let server = selectedServer {
@@ -172,6 +180,7 @@ struct ContentView: View {
         } detail: {
             // RIGHT: Detail view based on selection state
             detailContent
+                .padding(.leading, detailLeadingPadding)
                 #if os(macOS)
                 .navigationTitle(zenNavigationTitle)
                 #endif

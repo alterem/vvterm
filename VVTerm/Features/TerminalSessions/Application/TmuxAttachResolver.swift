@@ -20,7 +20,7 @@ final class TmuxAttachResolver {
     var tmuxEnabledDefault: Bool {
         let defaults = UserDefaults.standard
         if defaults.object(forKey: "terminalTmuxEnabledDefault") == nil {
-            return true
+            return false
         }
         return defaults.bool(forKey: "terminalTmuxEnabledDefault")
     }

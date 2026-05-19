@@ -767,6 +767,8 @@ struct iOSTerminalView: View {
     @State private var currentServerId: UUID?
     @State private var pendingCloseSession: ConnectionSession?
     @State private var showingZenPanel = false
+    @State private var showingSnippetPicker = false
+    @State private var settingsNavigationSelection: SettingsSelection?
     @State private var requestedTerminalDismissal = false
     @State private var voiceRecordingBySession: [UUID: Bool] = [:]
     @State private var pendingVoiceReturnBySession: [UUID: Bool] = [:]
@@ -776,8 +778,8 @@ struct iOSTerminalView: View {
     @AppStorage(CloudKitSyncConstants.terminalThemeNameKey) private var terminalThemeName = "Aizen Dark"
     @AppStorage(CloudKitSyncConstants.terminalThemeNameLightKey) private var terminalThemeNameLight = "Aizen Light"
     @AppStorage(CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) private var usePerAppearanceTheme = true
-    @AppStorage("sshAutoReconnect") private var autoReconnectEnabled = true
-    @AppStorage("terminalVoiceButtonEnabled") private var terminalVoiceButtonEnabled = true
+    @AppStorage("sshAutoReconnect") private var autoReconnectEnabled = false
+    @AppStorage("terminalVoiceButtonEnabled") private var terminalVoiceButtonEnabled = false
     private var effectiveThemeName: String {
         guard usePerAppearanceTheme else { return terminalThemeName }
         return colorScheme == .dark ? terminalThemeName : terminalThemeNameLight
@@ -1153,9 +1155,19 @@ struct iOSTerminalView: View {
         baseContent
             .limitReachedAlert(.tabs, isPresented: $showingTabLimitAlert)
             .limitReachedAlert(.fileTabs, isPresented: $showingFileTabLimitAlert)
-            .sheet(isPresented: $showingSettings) {
-                SettingsView()
+            .sheet(isPresented: $showingSettings, onDismiss: {
+                settingsNavigationSelection = nil
+            }) {
+                SettingsView(initialNavigationSelection: settingsNavigationSelection)
                     .modifier(AppearanceModifier())
+            }
+            .sheet(isPresented: $showingSnippetPicker) {
+                TerminalSnippetPickerView(
+                    onInsert: { snippet in
+                        insertSnippetIntoCurrentSession(snippet)
+                    },
+                    onManage: openCodeBlocksSettings
+                )
             }
             .sheet(item: $serverToEdit) { server in
                 NavigationStack {
@@ -1359,6 +1371,14 @@ struct iOSTerminalView: View {
             }
 
             Menu {
+                if selectedView == "terminal", effectiveSelectedSessionId != nil {
+                    Button {
+                        showingSnippetPicker = true
+                    } label: {
+                        Label(String(localized: "Code Blocks"), systemImage: "curlybraces.square")
+                    }
+                }
+
                 Button {
                     showingSettings = true
                 } label: {
@@ -1458,6 +1478,18 @@ struct iOSTerminalView: View {
               let selectedId = effectiveSelectedSessionId,
               let terminal = ConnectionSessionManager.shared.peekTerminal(for: selectedId) else { return }
         terminal.showFindNavigator()
+    }
+
+    private func insertSnippetIntoCurrentSession(_ snippet: TerminalSnippetEntry) {
+        guard let selectedId = effectiveSelectedSessionId else { return }
+        TerminalSnippetInsertion.insertIntoCurrentSession(snippet, sessionId: selectedId)
+    }
+
+    private func openCodeBlocksSettings() {
+        settingsNavigationSelection = .codeBlocks
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            showingSettings = true
+        }
     }
 
     @ViewBuilder
@@ -1799,6 +1831,10 @@ struct iOSTerminalView: View {
                 onNewFileTab: {
                     showingZenPanel = false
                     openNewFileTab()
+                },
+                onOpenCodeBlocks: {
+                    showingZenPanel = false
+                    showingSnippetPicker = true
                 },
                 onOpenSettings: {
                     showingZenPanel = false

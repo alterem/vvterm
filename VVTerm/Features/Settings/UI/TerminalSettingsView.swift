@@ -44,7 +44,7 @@ struct TerminalSettingsView: View {
     @AppStorage("terminalProgressEnabled") private var terminalProgressEnabled = true
     @AppStorage("terminalAccessoryCustomizationEnabled") private var terminalAccessoryCustomizationEnabled = true
     @AppStorage("terminalKeyboardDismissButtonEnabled") private var terminalKeyboardDismissButtonEnabled = true
-    @AppStorage("terminalTmuxEnabledDefault") private var tmuxEnabledDefault = true
+    @AppStorage("terminalTmuxEnabledDefault") private var tmuxEnabledDefault = false
     @AppStorage("terminalTmuxStartupBehaviorDefault") private var tmuxStartupBehaviorDefaultRaw = TmuxStartupBehavior.askEveryTime.rawValue
 
     // Copy settings
@@ -61,7 +61,7 @@ struct TerminalSettingsView: View {
     // SSH settings
     @AppStorage("sshKeepAliveEnabled") private var keepAliveEnabled = true
     @AppStorage("sshKeepAliveInterval") private var keepAliveInterval = 30
-    @AppStorage("sshAutoReconnect") private var autoReconnect = true
+    @AppStorage("sshAutoReconnect") private var autoReconnect = false
 
     @EnvironmentObject private var terminalThemeManager: TerminalThemeManager
 

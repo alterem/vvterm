@@ -14,7 +14,6 @@ struct ServerSidebarView: View {
     @State private var showingWorkspaceSwitcher = false
     @State private var showingAddServer = false
     @State private var showingLocalDiscovery = false
-    @State private var showingSupport = false
     @State private var showingProUpgrade = false
     @State private var showingServerSearch = false
     @State private var showingEnvironmentFilters = false
@@ -256,9 +255,6 @@ struct ServerSidebarView: View {
                 maxHeight: 520
             )
             #endif
-        }
-        .sheet(isPresented: $showingSupport) {
-            SupportSheet()
         }
         .proUpgradePresentation(isPresented: $showingProUpgrade)
         .sheet(isPresented: $showingCreateEnvironment) {
@@ -765,16 +761,6 @@ struct ServerSidebarView: View {
             .padding(.vertical, 8)
 
             Spacer()
-
-            Button {
-                showingSupport = true
-            } label: {
-                Image(systemName: "bubble.left.and.bubble.right")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .padding(.vertical, 8)
-            .help("Support & Feedback")
 
             Button {
                 #if os(macOS)

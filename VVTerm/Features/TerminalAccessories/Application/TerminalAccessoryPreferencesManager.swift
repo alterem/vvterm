@@ -212,6 +212,17 @@ final class TerminalAccessoryPreferencesManager: ObservableObject {
         await syncWithCloud()
     }
 
+    func webDAVSnapshotProfile() -> TerminalAccessoryProfile {
+        profile
+    }
+
+    func applyWebDAVSnapshot(_ remoteProfile: TerminalAccessoryProfile) {
+        let mergedProfile = TerminalAccessoryProfile
+            .merged(local: profile, remote: remoteProfile)
+            .normalized()
+        applyProfile(mergedProfile, scheduleCloudSync: false)
+    }
+
     private func updateLayoutItems(_ items: [TerminalAccessoryItemRef]) {
         updateLayout { layout in
             layout.activeItems = items

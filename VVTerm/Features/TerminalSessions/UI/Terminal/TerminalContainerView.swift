@@ -34,7 +34,7 @@ struct TerminalContainerView: View {
     @State private var connectWatchdogToken = UUID()
     @State private var hasEstablishedConnection = false
     @StateObject private var richPasteUI = TerminalRichPasteUIModel()
-    @AppStorage("sshAutoReconnect") private var autoReconnectEnabled = true
+    @AppStorage("sshAutoReconnect") private var autoReconnectEnabled = false
 
     /// Check if terminal already exists (was previously created)
     private var terminalAlreadyExists: Bool {
@@ -48,7 +48,7 @@ struct TerminalContainerView: View {
     @State private var voiceProcessing = false
     @State private var showingPermissionError = false
     @State private var permissionErrorMessage = ""
-    @AppStorage("terminalVoiceButtonEnabled") private var voiceButtonEnabled = true
+    @AppStorage("terminalVoiceButtonEnabled") private var voiceButtonEnabled = false
     #endif
 
     #if os(macOS)
@@ -815,7 +815,8 @@ struct TerminalContainerView: View {
             }
         }
 
-        guard MacTerminalShortcut.toggleVoiceRecording.matches(event) else {
+        guard voiceButtonEnabled,
+              MacTerminalShortcut.toggleVoiceRecording.matches(event) else {
             return event
         }
         toggleVoiceRecording()
@@ -825,6 +826,7 @@ struct TerminalContainerView: View {
 
     #if os(macOS) || os(iOS)
     private func toggleVoiceRecording() {
+        guard voiceButtonEnabled || showingVoiceRecording else { return }
         if showingVoiceRecording {
             Task {
                 let text = await audioService.stopRecording()
@@ -869,6 +871,7 @@ struct TerminalContainerView: View {
 
     #if os(macOS) || os(iOS)
     private func handleVoiceTrigger() {
+        guard voiceButtonEnabled else { return }
         guard session.connectionState.isConnected, isReady else { return }
         guard !showingVoiceRecording else { return }
         startVoiceRecording()

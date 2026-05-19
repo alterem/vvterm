@@ -27,7 +27,10 @@ actor CloudflareTransportManager {
     private let userAgent = "VVTerm"
     private let discoveryTimeout: TimeInterval = 12
     private let disconnectTimeout: Duration = .seconds(4)
-    private let metadataKeychain = KeychainStore(service: "app.vivy.vvterm.cloudflare.metadata")
+    private let metadataKeychain = KeychainStore(
+        service: "\(AppKeychainIdentity.currentService).cloudflare.metadata",
+        legacyServices: AppKeychainIdentity.legacyServices.map { "\($0).cloudflare.metadata" }
+    )
     private let metadataStorageKey = "cache.v1"
     private var activeSession: SessionActor?
     private var metadataCache: [String: AccessMetadata] = [:]

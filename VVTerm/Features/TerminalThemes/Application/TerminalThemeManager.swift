@@ -196,6 +196,26 @@ final class TerminalThemeManager: ObservableObject {
         deleteTheme(at: index)
     }
 
+    func webDAVSnapshotThemes() -> [TerminalTheme] {
+        customThemes
+    }
+
+    func webDAVSnapshotPreference() -> TerminalThemePreference {
+        TerminalThemePreference(
+            darkThemeName: currentPreferenceSnapshot().darkThemeName,
+            lightThemeName: currentPreferenceSnapshot().lightThemeName,
+            usePerAppearanceTheme: currentPreferenceSnapshot().usePerAppearanceTheme,
+            updatedAt: localPreferenceUpdatedAt()
+        )
+    }
+
+    func applyWebDAVSnapshot(themes: [TerminalTheme], preference: TerminalThemePreference?) {
+        mergeRemoteThemes(themes)
+        if let preference {
+            applyRemotePreferenceIfNewer(preference)
+        }
+    }
+
     private func deleteTheme(at index: Int) {
         customThemes[index].deletedAt = Date()
         customThemes[index].updatedAt = Date()

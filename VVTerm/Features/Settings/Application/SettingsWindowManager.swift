@@ -12,21 +12,31 @@ import AppKit
 
 #if os(macOS)
 
+private final class SettingsWindow: NSWindow {
+    override func cancelOperation(_ sender: Any?) {
+        close()
+    }
+}
+
 /// Wrapper view that observes language changes and applies locale environment
 private struct LocalizedSettingsView: View {
+    let initialSelection: SettingsSelection?
+
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.system.rawValue
     @StateObject private var appLockManager = AppLockManager.shared
     @StateObject private var terminalThemeManager = TerminalThemeManager.shared
     @StateObject private var terminalAccessoryPreferencesManager = TerminalAccessoryPreferencesManager.shared
+    @StateObject private var terminalSnippetManager = TerminalSnippetManager.shared
 
     var body: some View {
         let locale = AppLanguage(rawValue: appLanguage)?.locale ?? Locale.current
-        SettingsView()
+        SettingsView(initialSelection: initialSelection ?? .pro)
             .modifier(AppearanceModifier())
             .environment(\.locale, locale)
             .environmentObject(appLockManager)
             .environmentObject(terminalThemeManager)
             .environmentObject(terminalAccessoryPreferencesManager)
+            .environmentObject(terminalSnippetManager)
     }
 }
 
@@ -38,16 +48,21 @@ final class SettingsWindowManager {
 
     private init() {}
 
-    func show() {
-        if let existingWindow = settingsWindow, existingWindow.isVisible {
+    func show(selection: SettingsSelection? = nil) {
+        if let existingWindow = settingsWindow {
+            if let hostingController = existingWindow.contentViewController as? NSHostingController<LocalizedSettingsView>,
+               let selection {
+                hostingController.rootView = LocalizedSettingsView(initialSelection: selection)
+            }
+
             existingWindow.makeKeyAndOrderFront(nil)
             return
         }
 
-        let settingsView = LocalizedSettingsView()
+        let settingsView = LocalizedSettingsView(initialSelection: selection)
         let hostingController = NSHostingController(rootView: settingsView)
 
-        let window = NSWindow(contentViewController: hostingController)
+        let window = SettingsWindow(contentViewController: hostingController)
         window.title = "Settings"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true

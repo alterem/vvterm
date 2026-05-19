@@ -2,7 +2,10 @@ import Foundation
 import Cloudflared
 
 actor CloudflareTokenStoreAdapter: TokenStore {
-    private let store = KeychainStore(service: "app.vivy.vvterm.cloudflare.tokens")
+    private let store = KeychainStore(
+        service: "\(AppKeychainIdentity.currentService).cloudflare.tokens",
+        legacyServices: AppKeychainIdentity.legacyServices.map { "\($0).cloudflare.tokens" }
+    )
 
     func readToken(for key: String) async throws -> String? {
         try store.getString(namespacedKey(for: key))

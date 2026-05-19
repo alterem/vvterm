@@ -139,6 +139,8 @@
 "Enable terminal notifications" = "Activar notificaciones del terminal";
 "Show progress overlays" = "Mostrar superposiciones de progreso";
 "Show voice input button" = "Mostrar botón de entrada de voz";
+"Enable voice transcription" = "Activar transcripción de voz";
+"Voice transcription is off by default. Turning it on enables the mic button and keyboard shortcuts." = "La transcripción de voz está desactivada de forma predeterminada. Al activarla se habilitan el botón de micrófono y los atajos de teclado.";
 "Copy Text Processing" = "Procesamiento de texto al copiar";
 "Transformations applied when copying text from terminal" = "Transformaciones aplicadas al copiar texto del terminal";
 "Trim trailing whitespace" = "Eliminar espacios en blanco al final";
@@ -1005,3 +1007,37 @@
 "Paste Text Instead" = "Pegar texto en su lugar";
 "Always Upload skips this prompt next time." = "“Subir siempre” omitirá este aviso la próxima vez.";
 "Image ready to upload" = "Imagen lista para subir";
+
+/* Code Blocks */
+"Description" = "Description";
+"Manage" = "Manage";
+"Code Blocks" = "Code Blocks";
+"Code Block" = "Code Block";
+"Delete Code Block" = "Delete Code Block";
+"Delete Code Block?" = "Delete Code Block?";
+"Edit Code Block" = "Edit Code Block";
+"New Code Block" = "New Code Block";
+"Default Send Behavior" = "Default Send Behavior";
+"No code blocks yet." = "No code blocks yet.";
+"No matching code blocks." = "No matching code blocks.";
+"Create reusable code blocks for the current terminal." = "Create reusable code blocks for the current terminal.";
+"Search code blocks" = "Search code blocks";
+"Add a code block" = "Add a code block";
+"%lld/%lld code blocks" = "%lld/%lld code blocks";
+"No code blocks available." = "No code blocks available.";
+"Create code blocks in the library, then insert them into the current terminal here." = "Create code blocks in the library, then insert them into the current terminal here.";
+"Insert this code block into the current terminal" = "Insert this code block into the current terminal";
+"Open the code block library" = "Open the code block library";
+"Manage reusable code blocks for any terminal" = "Manage reusable code blocks for any terminal";
+"Open code blocks and insert into the current terminal" = "Open code blocks and insert into the current terminal";
+"You can create up to %lld code blocks." = "You can create up to %lld code blocks.";
+"Enter a name for this code block." = "Enter a name for this code block.";
+"Enter code content before saving." = "Enter code content before saving.";
+"This code block could not be found." = "This code block could not be found.";
+"Code blocks default to insert-only so they do not run immediately." = "Code blocks default to insert-only so they do not run immediately.";
+"Upload these local items to WebDAV?" = "Upload these local items to WebDAV?";
+"Code blocks: global code block names, content, descriptions, and send behavior." = "Code blocks: global code block names, content, descriptions, and send behavior.";
+"Download and merge WebDAV data into this device?" = "Download and merge WebDAV data into this device?";
+"WebDAV restore can update server metadata, workspaces, themes, accessory settings, and code blocks." = "WebDAV restore can update server metadata, workspaces, themes, accessory settings, and code blocks.";
+"Review the WebDAV backup scope before uploading" = "Review the WebDAV backup scope before uploading";
+"WebDAV sync stores a JSON snapshot of your server metadata, workspace data, terminal themes, accessory settings, and code blocks. Passwords and SSH keys stay in this device's Keychain." = "WebDAV sync stores a JSON snapshot of your server metadata, workspace data, terminal themes, accessory settings, and code blocks. Passwords and SSH keys stay in this device's Keychain.";

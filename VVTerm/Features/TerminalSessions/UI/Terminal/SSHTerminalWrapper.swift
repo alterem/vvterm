@@ -815,7 +815,7 @@ private struct SSHTerminalRepresentable: UIViewRepresentable {
         }
         context.coordinator.wasActive = shouldRenderTerminal
 
-        let autoReconnectEnabled = (UserDefaults.standard.object(forKey: "sshAutoReconnect") as? Bool) ?? true
+        let autoReconnectEnabled = (UserDefaults.standard.object(forKey: "sshAutoReconnect") as? Bool) ?? false
         let shellMissing = ConnectionSessionManager.shared.shellId(for: session) == nil
         let shellStartInFlight = ConnectionSessionManager.shared.isShellStartInFlight(for: session.id)
         let shouldRestoreKeyboardFocus =

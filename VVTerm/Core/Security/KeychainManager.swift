@@ -10,10 +10,12 @@ final class KeychainManager {
 
     private let store: KeychainStore
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Keychain")
-    private var isSyncEnabled: Bool { SyncSettings.isEnabled }
 
     private init() {
-        store = KeychainStore(service: "app.vivy.vvterm")
+        store = KeychainStore(
+            service: AppKeychainIdentity.currentService,
+            legacyServices: AppKeychainIdentity.legacyServices
+        )
     }
 
     // MARK: - Password Operations
@@ -23,7 +25,7 @@ final class KeychainManager {
         guard let data = password.data(using: .utf8) else {
             throw KeychainError.encodingFailed
         }
-        try store.set(data, forKey: key, iCloudSync: isSyncEnabled)
+        try store.set(data, forKey: key)
         logger.info("Stored password for server \(serverId.uuidString)")
     }
 
@@ -45,19 +47,19 @@ final class KeychainManager {
 
     func storeSSHKey(for serverId: UUID, privateKey: Data, passphrase: String?, publicKey: Data? = nil) throws {
         let keyKey = sshKeyKey(for: serverId)
-        try store.set(privateKey, forKey: keyKey, iCloudSync: isSyncEnabled)
+        try store.set(privateKey, forKey: keyKey)
 
         if let passphrase = passphrase {
             let passphraseKey = sshPassphraseKey(for: serverId)
             guard let passphraseData = passphrase.data(using: .utf8) else {
                 throw KeychainError.encodingFailed
             }
-            try store.set(passphraseData, forKey: passphraseKey, iCloudSync: isSyncEnabled)
+            try store.set(passphraseData, forKey: passphraseKey)
         }
 
         let publicKeyKey = sshPublicKeyKey(for: serverId)
         if let publicKey, !publicKey.isEmpty {
-            try store.set(publicKey, forKey: publicKeyKey, iCloudSync: isSyncEnabled)
+            try store.set(publicKey, forKey: publicKeyKey)
         } else {
             try? store.delete(publicKeyKey)
         }
@@ -132,8 +134,8 @@ final class KeychainManager {
             throw KeychainError.encodingFailed
         }
 
-        try store.set(idData, forKey: idKey, iCloudSync: isSyncEnabled)
-        try store.set(secretData, forKey: secretKey, iCloudSync: isSyncEnabled)
+        try store.set(idData, forKey: idKey)
+        try store.set(secretData, forKey: secretKey)
         logger.info("Stored Cloudflare service token for server \(serverId.uuidString)")
     }
 
@@ -154,6 +156,29 @@ final class KeychainManager {
     func deleteCloudflareServiceToken(for serverId: UUID) {
         try? store.delete(cloudflareClientIDKey(for: serverId))
         try? store.delete(cloudflareClientSecretKey(for: serverId))
+    }
+
+    // MARK: - WebDAV Sync
+
+    func storeWebDAVPassword(_ password: String) throws {
+        guard let data = password.data(using: .utf8) else {
+            throw KeychainError.encodingFailed
+        }
+        try store.set(data, forKey: webDAVPasswordKey())
+    }
+
+    func getWebDAVPassword() throws -> String? {
+        guard let data = try store.get(webDAVPasswordKey()) else {
+            return nil
+        }
+        guard let password = String(data: data, encoding: .utf8) else {
+            throw KeychainError.decodingFailed
+        }
+        return password
+    }
+
+    func deleteWebDAVPassword() {
+        try? store.delete(webDAVPasswordKey())
     }
 
     // MARK: - Delete Operations
@@ -209,6 +234,10 @@ final class KeychainManager {
         "server.\(serverId.uuidString).cloudflare.clientsecret"
     }
 
+    private func webDAVPasswordKey() -> String {
+        "sync.webdav.password"
+    }
+
     // MARK: - Reusable SSH Keys (Keychain Library)
 
     private let sshKeysIndexKey = "vvterm.sshkeys.index"
@@ -225,7 +254,7 @@ final class KeychainManager {
     /// Save the SSH key index
     private func saveSSHKeysIndex(_ keys: [SSHKeyEntry]) throws {
         let data = try JSONEncoder().encode(keys)
-        try store.set(data, forKey: sshKeysIndexKey, iCloudSync: isSyncEnabled)
+        try store.set(data, forKey: sshKeysIndexKey)
     }
 
     /// Store a new SSH key in the keychain library
@@ -245,12 +274,12 @@ final class KeychainManager {
         )
 
         // Store the actual key data
-        try store.set(privateKey, forKey: storedKeyDataKey(for: entry.id), iCloudSync: isSyncEnabled)
+        try store.set(privateKey, forKey: storedKeyDataKey(for: entry.id))
 
         // Store passphrase if provided
         if let passphrase = passphrase, !passphrase.isEmpty,
            let passphraseData = passphrase.data(using: .utf8) {
-            try store.set(passphraseData, forKey: storedKeyPassphraseKey(for: entry.id), iCloudSync: isSyncEnabled)
+            try store.set(passphraseData, forKey: storedKeyPassphraseKey(for: entry.id))
         }
 
         // Update index
@@ -299,6 +328,49 @@ final class KeychainManager {
         keys[index].name = name
         try saveSSHKeysIndex(keys)
         logger.info("Updated SSH key name to '\(name)'")
+    }
+
+    /// Update an existing stored SSH key. Pass `nil` for replacement values that should be preserved.
+    func updateStoredSSHKeyEntry(
+        _ keyId: UUID,
+        name: String,
+        replacementPrivateKey: Data? = nil,
+        replacementPassphrase: String? = nil,
+        removePassphrase: Bool = false,
+        keyType: SSHKeyType? = nil,
+        publicKey: String? = nil
+    ) throws -> SSHKeyEntry {
+        var keys = getStoredSSHKeys()
+        guard let index = keys.firstIndex(where: { $0.id == keyId }) else {
+            throw KeychainError.itemNotFound
+        }
+
+        if let replacementPrivateKey {
+            try store.set(replacementPrivateKey, forKey: storedKeyDataKey(for: keyId))
+        }
+
+        if removePassphrase {
+            try? store.delete(storedKeyPassphraseKey(for: keyId))
+            keys[index].hasPassphrase = false
+        } else if let replacementPassphrase {
+            if replacementPassphrase.isEmpty {
+                try? store.delete(storedKeyPassphraseKey(for: keyId))
+                keys[index].hasPassphrase = false
+            } else if let passphraseData = replacementPassphrase.data(using: .utf8) {
+                try store.set(passphraseData, forKey: storedKeyPassphraseKey(for: keyId))
+                keys[index].hasPassphrase = true
+            } else {
+                throw KeychainError.encodingFailed
+            }
+        }
+
+        keys[index].name = name
+        keys[index].keyType = keyType
+        keys[index].publicKey = publicKey
+        try saveSSHKeysIndex(keys)
+
+        logger.info("Updated SSH key '\(name)' in keychain library")
+        return keys[index]
     }
 
     private func storedKeyDataKey(for keyId: UUID) -> String {
