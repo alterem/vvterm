@@ -704,6 +704,7 @@ class GhosttyTerminalView: UIView {
     private var nativeSelectionAffinity: UITextStorageDirection = .forward
     private var nativeSelectionInteractionActive = false
     private var prefersNativeSelectionFirstResponder = false
+    private var shouldRestoreIMEProxyFocusAfterNativeSelection = false
     private var nativeTextInteraction: UITextInteraction?
     private var nativeFindInteraction: UIFindInteraction?
     @available(iOS 16.0, *)
@@ -1503,13 +1504,37 @@ class GhosttyTerminalView: UIView {
     func requestKeyboardFocus(for reason: TerminalKeyboardFocusReason) -> Bool {
         guard !isFindNavigatorActive else { return false }
         guard keyboardFocusPolicy.requestFocus(for: reason) else { return false }
-        prefersNativeSelectionFirstResponder = false
-        if usesNativeTouchSelection, nativeSelectedRange != nil {
-            setNativeSelectedRange(nil)
-        }
+        clearNativeSelectionStateForTerminalInput()
         notifyKeyboardBrowseModeChange()
         _ = becomeFirstResponder()
         return true
+    }
+
+    @discardableResult
+    private func exitNativeSelectionTextInputContextForTerminalInput() -> Bool {
+        guard isNativeSelectionTextInputContext else { return true }
+        guard !isFindNavigatorActive else { return false }
+
+        nativeSelectionInteractionActive = false
+        return requestKeyboardFocus(for: .explicitUserRequest)
+    }
+
+    private func clearNativeSelectionStateForTerminalInput() {
+        guard usesNativeTouchSelection else { return }
+        nativeSelectionInteractionActive = false
+        prefersNativeSelectionFirstResponder = false
+        shouldRestoreIMEProxyFocusAfterNativeSelection = false
+        if nativeSelectedRange != nil {
+            setNativeSelectedRange(nil)
+        }
+    }
+
+    private func shouldRedirectNativeSelectionPressesToTerminalInput(_ presses: Set<UIPress>) -> Bool {
+        guard isNativeSelectionTextInputContext else { return false }
+        return presses.contains { press in
+            guard let key = press.key else { return false }
+            return !key.modifierFlags.contains(.command)
+        }
     }
 
     @discardableResult
@@ -1546,6 +1571,12 @@ class GhosttyTerminalView: UIView {
 
     private func notifyKeyboardBrowseModeChange() {
         onKeyboardBrowseModeChange?(keyboardFocusPolicy.isBrowsing)
+        if imeProxyTextView.isFirstResponder {
+            imeProxyTextView.reloadInputViews()
+        }
+        if super.isFirstResponder {
+            reloadInputViews()
+        }
     }
 
     private func notifyFindNavigatorVisibilityChange() {
@@ -1727,7 +1758,16 @@ class GhosttyTerminalView: UIView {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
         let location = touches.first?.location(in: self)
-        if usesNativeTouchSelection, nativeSelectionInteractionActive || nativeSelectedRange != nil {
+        if usesNativeTouchSelection, nativeSelectionInteractionActive {
+            return
+        }
+        if usesNativeTouchSelection, nativeSelectedRange != nil || prefersNativeSelectionFirstResponder {
+            if let location, isPointOnNativeSelectionHandleHitArea(location) {
+                return
+            }
+            clearNativeSelectionStateForTerminalInput()
+            guard shouldAutoFocusKeyboard(for: touches) else { return }
+            requestKeyboardFocus(for: .directTouch)
             return
         }
         if usesAppOwnedTouchSelection,
@@ -2007,6 +2047,22 @@ class GhosttyTerminalView: UIView {
             prefersNativeSelectionFirstResponder = false
         }
         nativeTextInputDelegate?.selectionDidChange(self)
+    }
+
+    private func isPointOnNativeSelectionHandleHitArea(_ point: CGPoint) -> Bool {
+        guard usesNativeTouchSelection,
+              let nativeSelectedRange,
+              nativeSelectedRange.length > 0 else {
+            return false
+        }
+        let clamped = nativeSelectionSnapshot.clampedRange(nativeSelectedRange)
+        guard clamped.length > 0 else { return false }
+
+        let startRect = nativeSelectionSnapshot.caretRect(for: clamped.location)
+        let endRect = nativeSelectionSnapshot.caretRect(for: clamped.location + clamped.length)
+        let hitSlop = max(28, nativeSelectionSnapshot.cellSize.height * 1.5)
+        return startRect.insetBy(dx: -hitSlop, dy: -hitSlop).contains(point)
+            || endRect.insetBy(dx: -hitSlop, dy: -hitSlop).contains(point)
     }
 
     private func selectedNativeSelectionText() -> String? {
@@ -3122,6 +3178,9 @@ class GhosttyTerminalView: UIView {
                 result.forwardedToSystem.insert(press)
                 continue
             }
+            if isNativeSelectionTextInputContext {
+                clearNativeSelectionStateForTerminalInput()
+            }
             if textInputModel.hasActiveIMEComposition, key.keyCode == .keyboardEscape {
                 invalidateLocalTextInputSession()
                 result.didHandleGhosttyInput = true
@@ -3234,6 +3293,15 @@ class GhosttyTerminalView: UIView {
     }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if shouldRedirectNativeSelectionPressesToTerminalInput(presses) {
+            guard exitNativeSelectionTextInputContextForTerminalInput() else {
+                super.pressesBegan(presses, with: event)
+                return
+            }
+            imeProxyTextView.pressesBegan(presses, with: event)
+            return
+        }
+
         let pendingCount = pendingSystemTextInputHardwareKeys.count
         let result = processHardwarePressesBegan(presses, event: event)
         if !result.forwardedToSystem.isEmpty {
@@ -3321,6 +3389,9 @@ class GhosttyTerminalView: UIView {
 
     fileprivate func handleIMEProxyInsertText(_ text: String, fromIMEComposition: Bool = false) -> Bool {
         guard canRouteTerminalInput else { return true }
+        if isNativeSelectionTextInputContext {
+            clearNativeSelectionStateForTerminalInput()
+        }
 
         let normalized = text.precomposedStringWithCanonicalMapping
         guard !normalized.isEmpty else { return true }
@@ -3689,13 +3760,18 @@ extension GhosttyTerminalView: UITextInteractionDelegate {
     func interactionShouldBegin(_ interaction: UITextInteraction, at point: CGPoint) -> Bool {
         guard usesNativeTouchSelection else { return false }
         prefersNativeSelectionFirstResponder = true
+        shouldRestoreIMEProxyFocusAfterNativeSelection = imeProxyTextView.isFirstResponder
         refreshNativeSelectionSnapshot()
         return nativeSelectionSnapshot.length > 0
     }
 
     func interactionWillBegin(_ interaction: UITextInteraction) {
+        shouldRestoreIMEProxyFocusAfterNativeSelection = shouldRestoreIMEProxyFocusAfterNativeSelection
+            || imeProxyTextView.isFirstResponder
         nativeSelectionInteractionActive = true
-        _ = becomeFirstResponder()
+        if !imeProxyTextView.isFirstResponder {
+            _ = becomeFirstResponder()
+        }
         refreshNativeSelectionSnapshot()
     }
 
@@ -3705,6 +3781,17 @@ extension GhosttyTerminalView: UITextInteractionDelegate {
             prefersNativeSelectionFirstResponder = false
         }
         refreshNativeSelectionSnapshot()
+        guard shouldRestoreIMEProxyFocusAfterNativeSelection else { return }
+        shouldRestoreIMEProxyFocusAfterNativeSelection = false
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  !self.isShuttingDown,
+                  self.isTextInputSessionEligible,
+                  !self.isFindNavigatorActive else {
+                return
+            }
+            _ = self.imeProxyTextView.becomeFirstResponder()
+        }
     }
 }
 
@@ -3980,7 +4067,7 @@ extension GhosttyTerminalView {
     }
 
     private var shouldHideKeyboardAccessoryBar: Bool {
-        hasHardwareKeyboardAttached
+        hasHardwareKeyboardAttached || keyboardFocusPolicy.isBrowsing
     }
 
     fileprivate func resolvedInputAccessoryView() -> UIView? {
@@ -4003,7 +4090,7 @@ extension GhosttyTerminalView {
     }
 
     override var inputAccessoryView: UIView? {
-        nil
+        resolvedInputAccessoryView()
     }
 
     private func handleToolbarKey(_ key: TerminalKey) {
@@ -4928,14 +5015,18 @@ extension GhosttyTerminalView: UIKeyInput, UITextInputTraits {
     }
 
     func insertText(_ text: String) {
-        guard !isNativeSelectionTextInputContext else { return }
+        if isNativeSelectionTextInputContext {
+            guard exitNativeSelectionTextInputContextForTerminalInput() else { return }
+        }
         let normalized = text.precomposedStringWithCanonicalMapping
         let wasComposing = textInputModel.hasActiveIMEComposition
         _ = handleIMEProxyInsertText(normalized, fromIMEComposition: wasComposing)
     }
 
     func deleteBackward() {
-        guard !isNativeSelectionTextInputContext else { return }
+        if isNativeSelectionTextInputContext {
+            guard exitNativeSelectionTextInputContextForTerminalInput() else { return }
+        }
         applyTerminalTextInputEffects(textInputModel.handleDeleteBackward())
     }
 
@@ -5124,9 +5215,10 @@ extension GhosttyTerminalView: UITextInput {
     }
 
     func replace(_ range: UITextRange, withText text: String) {
-        guard !isNativeSelectionTextInputContext else {
+        if isNativeSelectionTextInputContext {
             guard !text.isEmpty else { return }
-            sendText(text)
+            guard exitNativeSelectionTextInputContextForTerminalInput() else { return }
+            _ = handleIMEProxyInsertText(text, fromIMEComposition: false)
             return
         }
         let replacementRange = terminalTextInputRange(from: range)
@@ -5140,7 +5232,9 @@ extension GhosttyTerminalView: UITextInput {
     }
 
     func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
-        guard !isNativeSelectionTextInputContext else { return }
+        if isNativeSelectionTextInputContext {
+            guard exitNativeSelectionTextInputContextForTerminalInput() else { return }
+        }
         discardPendingSystemTextInputHardwareKey()
         applyTerminalTextInputEffects(
             textInputModel.handleSetMarkedText(
@@ -5152,7 +5246,9 @@ extension GhosttyTerminalView: UITextInput {
     }
 
     func unmarkText() {
-        guard !isNativeSelectionTextInputContext else { return }
+        if isNativeSelectionTextInputContext {
+            guard exitNativeSelectionTextInputContextForTerminalInput() else { return }
+        }
         discardPendingSystemTextInputHardwareKey()
         applyTerminalTextInputEffects(textInputModel.handleUnmarkText())
     }
