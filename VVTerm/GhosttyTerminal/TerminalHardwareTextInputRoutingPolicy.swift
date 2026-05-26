@@ -10,11 +10,14 @@ enum TerminalHardwareTextInputRoutingPolicy {
         hasTerminalFallbackKey: Bool,
         keyProducesText: Bool
     ) -> Bool {
-        if hasControlModifier || hasAlternateModifier || hasCommandModifier {
+        if hasCommandModifier {
             return false
         }
         if hasActiveIMEComposition {
             return true
+        }
+        if hasControlModifier {
+            return false
         }
         if isSystemTextInputToggleKey {
             return true
@@ -22,9 +25,28 @@ enum TerminalHardwareTextInputRoutingPolicy {
         if hasTerminalFallbackKey {
             return false
         }
-        // Let UIKit own all remaining unmodified hardware text input so IMEs,
-        // dead keys, and layout-specific composition can start reliably.
-        let _ = keyProducesText
-        return true
+        if hasAlternateModifier {
+            return keyProducesText
+        }
+        if keyProducesText {
+            return true
+        }
+        return false
+    }
+
+    static func shouldRecordPendingInterpretedHardwareKey(
+        keyProducesText: Bool,
+        hasControlModifier: Bool,
+        hasAlternateModifier: Bool,
+        hasCommandModifier: Bool,
+        hasActiveIMEComposition: Bool,
+        isSystemTextInputToggleKey: Bool
+    ) -> Bool {
+        keyProducesText
+            && !hasActiveIMEComposition
+            && !hasControlModifier
+            && !hasAlternateModifier
+            && !hasCommandModifier
+            && !isSystemTextInputToggleKey
     }
 }

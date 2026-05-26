@@ -3,7 +3,7 @@ import Testing
 
 struct TerminalHardwareTextInputRoutingPolicyTests {
     @Test
-    func routesPrintablePinyinKeysToSystemTextInput() {
+    func routesPrintableHardwareTextToSystemTextInput() {
         #expect(
             TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
                 hasControlModifier: false,
@@ -14,66 +14,6 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasTerminalFallbackKey: false,
                 keyProducesText: true
             )
-        )
-    }
-
-    @Test
-    func routesPrintableKanaKeysToSystemTextInput() {
-        #expect(
-            TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
-                hasControlModifier: false,
-                hasAlternateModifier: false,
-                hasCommandModifier: false,
-                hasActiveIMEComposition: false,
-                isSystemTextInputToggleKey: false,
-                hasTerminalFallbackKey: false,
-                keyProducesText: true
-            )
-        )
-    }
-
-    @Test
-    func routesPrintableHangulKeysToSystemTextInput() {
-        #expect(
-            TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
-                hasControlModifier: false,
-                hasAlternateModifier: false,
-                hasCommandModifier: false,
-                hasActiveIMEComposition: false,
-                isSystemTextInputToggleKey: false,
-                hasTerminalFallbackKey: false,
-                keyProducesText: true
-            )
-        )
-    }
-
-    @Test
-    func routesLatinPrintableKeysToSystemTextInput() {
-        #expect(
-            TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
-                hasControlModifier: false,
-                hasAlternateModifier: false,
-                hasCommandModifier: false,
-                hasActiveIMEComposition: false,
-                isSystemTextInputToggleKey: false,
-                hasTerminalFallbackKey: false,
-                keyProducesText: true
-            )
-        )
-    }
-
-    @Test
-    func keepsTerminalFallbackKeysOffSystemTextInputEvenInCJKLayouts() {
-        #expect(
-            TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
-                hasControlModifier: false,
-                hasAlternateModifier: false,
-                hasCommandModifier: false,
-                hasActiveIMEComposition: false,
-                isSystemTextInputToggleKey: false,
-                hasTerminalFallbackKey: true,
-                keyProducesText: true
-            ) == false
         )
     }
 
@@ -93,7 +33,7 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
     }
 
     @Test
-    func alwaysRoutesActiveCompositionThroughSystemTextInput() {
+    func routesActiveCompositionThroughSystemTextInput() {
         #expect(
             TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
                 hasControlModifier: false,
@@ -105,10 +45,36 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 keyProducesText: false
             )
         )
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
+                hasControlModifier: true,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: true,
+                isSystemTextInputToggleKey: false,
+                hasTerminalFallbackKey: true,
+                keyProducesText: false
+            )
+        )
     }
 
     @Test
-    func keepsModifiedPrintableKeysOnDirectGhosttyPath() {
+    func keepsNavigationFallbackKeysOnDirectGhosttyPathWhenNotComposing() {
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false,
+                isSystemTextInputToggleKey: false,
+                hasTerminalFallbackKey: true,
+                keyProducesText: true
+            ) == false
+        )
+    }
+
+    @Test
+    func keepsControlModifiedPrintableKeysOnDirectGhosttyPath() {
         #expect(
             TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
                 hasControlModifier: true,
@@ -120,6 +86,10 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 keyProducesText: true
             ) == false
         )
+    }
+
+    @Test
+    func routesOptionModifiedPrintableKeysToSystemTextInputForDeadKeys() {
         #expect(
             TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
                 hasControlModifier: false,
@@ -129,8 +99,27 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 isSystemTextInputToggleKey: false,
                 hasTerminalFallbackKey: false,
                 keyProducesText: true
+            )
+        )
+    }
+
+    @Test
+    func keepsOptionModifiedNavigationKeysOnDirectGhosttyPath() {
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
+                hasControlModifier: false,
+                hasAlternateModifier: true,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false,
+                isSystemTextInputToggleKey: false,
+                hasTerminalFallbackKey: true,
+                keyProducesText: true
             ) == false
         )
+    }
+
+    @Test
+    func keepsCommandModifiedKeysOutOfSystemTextInputPolicy() {
         #expect(
             TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
                 hasControlModifier: false,
@@ -140,6 +129,48 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 isSystemTextInputToggleKey: false,
                 hasTerminalFallbackKey: false,
                 keyProducesText: true
+            ) == false
+        )
+    }
+
+    @Test
+    func recordsPlainPrintableHardwareKeysForInterpretedKeyEventCommit() {
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.shouldRecordPendingInterpretedHardwareKey(
+                keyProducesText: true,
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false,
+                isSystemTextInputToggleKey: false
+            )
+        )
+    }
+
+    @Test
+    func doesNotRecordOptionTextAsPendingHardwareKey() {
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.shouldRecordPendingInterpretedHardwareKey(
+                keyProducesText: true,
+                hasControlModifier: false,
+                hasAlternateModifier: true,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false,
+                isSystemTextInputToggleKey: false
+            ) == false
+        )
+    }
+
+    @Test
+    func doesNotRecordPrintableKeysDuringIMEComposition() {
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.shouldRecordPendingInterpretedHardwareKey(
+                keyProducesText: true,
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: true,
+                isSystemTextInputToggleKey: false
             ) == false
         )
     }
@@ -172,6 +203,23 @@ struct TerminalKeyboardFocusPolicyTests {
         let explicitUserRequestAllowed = policy.requestFocus(for: .explicitUserRequest)
         #expect(explicitUserRequestAllowed)
 
+        #expect(policy.allowsAutomaticFocus)
+        #expect(policy.shouldRestoreOnReconnect)
+    }
+
+    @Test
+    func hardwareKeyboardFocusLeavesBrowseMode() {
+        var policy = TerminalKeyboardFocusPolicy()
+        let initialActivationAllowed = policy.requestFocus(for: .initialActivation)
+
+        #expect(initialActivationAllowed)
+        policy.dismissForUser()
+
+        #expect(policy.allowsAutomaticFocus == false)
+
+        let hardwareKeyboardAllowed = policy.requestFocus(for: .hardwareKeyboard)
+
+        #expect(hardwareKeyboardAllowed)
         #expect(policy.allowsAutomaticFocus)
         #expect(policy.shouldRestoreOnReconnect)
     }
